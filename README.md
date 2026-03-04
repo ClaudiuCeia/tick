@@ -73,6 +73,7 @@ Run locally:
 - `bun run example:pixel-painter`
 - `bun run example:hud-viewport`
 - `bun run example:hud-layout`
+- `bun run example:hud-debug`
 
 ## Persistence
 
@@ -189,6 +190,15 @@ For a larger RPG/MOBA-style HUD with nested deck/stack nodes:
 
 ```bash
 bun run example:hud-layout
+```
+
+For HUD debugging, add `HudLayoutDebugRenderComponent` to any awake HUD entity. It draws resolved
+layout frames, anchor points, and optional labels for all `HudLayoutNodeComponent` nodes.
+
+Minimal runnable debug demo:
+
+```bash
+bun run example:hud-debug
 ```
 
 ## Development

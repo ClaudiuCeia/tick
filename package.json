@@ -45,6 +45,7 @@
     "example:pixel-painter": "bun run examples/pixel-painter/dev-server.ts",
     "example:hud-viewport": "bun run examples/hud-viewport/dev-server.ts",
     "example:hud-layout": "bun run examples/hud-layout/dev-server.ts",
+    "example:hud-debug": "bun run examples/hud-debug/dev-server.ts",
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test",
     "prepublishOnly": "bun run check"
   },

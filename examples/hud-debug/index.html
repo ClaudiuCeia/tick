@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tick - hud debug</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #0b1118;
+        font-family: "JetBrains Mono", monospace;
+        color: #dceafe;
+      }
+
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      p {
+        margin: 6px 0 0;
+        color: #9ab2d2;
+      }
+
+      canvas {
+        margin-top: 14px;
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border: 1px solid #2f4565;
+        border-radius: 10px;
+        background: #0f1622;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>HUD layout debug layer</h1>
+      <p>Blue frames are resolved HUD nodes, yellow dots are anchors, labels show node entities.</p>
+      <canvas id="canvas" width="1280" height="720"></canvas>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
