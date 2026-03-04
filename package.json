@@ -43,6 +43,7 @@
     "example:dino-runner": "bun run examples/dino-runner/dev-server.ts",
     "example:collision-lab": "bun run examples/collision-lab/dev-server.ts",
     "example:pixel-painter": "bun run examples/pixel-painter/dev-server.ts",
+    "example:hud-viewport": "bun run examples/hud-viewport/dev-server.ts",
     "check": "bun run typecheck && bun run lint && bun run format:check && bun run test",
     "prepublishOnly": "bun run check"
   },

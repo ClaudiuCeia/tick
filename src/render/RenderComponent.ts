@@ -10,6 +10,10 @@ export abstract class RenderComponent<T extends Entity = Entity> extends Compone
   public zIndex: RenderLayer;
   protected elapsed: number = 0;
 
+  public get isHudComponent(): boolean {
+    return false;
+  }
+
   constructor(zIndex: RenderLayer) {
     super();
     this.zIndex = zIndex;

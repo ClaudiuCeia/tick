@@ -8,6 +8,7 @@ import { CollisionEntity } from "../collision/CollisionEntity.ts";
 import { RectangleCollisionShape } from "../collision/shapes/RectangleCollisionShape.ts";
 import { RenderComponent } from "./RenderComponent.ts";
 import { HudRenderComponent } from "./HudRenderComponent.ts";
+import { HudViewport } from "./HudViewport.ts";
 import { RenderLayer } from "./RenderLayer.ts";
 import { RenderSystem } from "./RenderSystem.ts";
 import type { ICamera } from "./ICamera.ts";
@@ -223,5 +224,82 @@ describe("RenderSystem ordering and registration", () => {
     system.render();
 
     expect(probe.seen).toEqual(new Vector2D(321, 123));
+  });
+
+  test("applies HudViewport only to HudRenderComponent instances", () => {
+    const camera = new CameraEntity();
+    camera.awake();
+
+    const owner = new Node();
+    const rawHud = new HudLoggedRenderComponent(RenderLayer.HUD, "raw-hud", []);
+    const probe = new CanvasSizeProbeHudComponent(RenderLayer.HUD);
+    owner.addComponent(rawHud);
+    owner.addComponent(probe);
+    owner.awake();
+
+    const setTransformCalls: number[][] = [];
+    let saveCount = 0;
+    let restoreCount = 0;
+    const ctx = {
+      save: () => {
+        saveCount++;
+      },
+      restore: () => {
+        restoreCount++;
+      },
+      setTransform: (...args: number[]) => {
+        setTransformCalls.push(args);
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    const hudViewport = new HudViewport(new Vector2D(400, 200), "contain", false);
+    const system = new RenderSystem(
+      { context: ctx, size: new Vector2D(800, 600) },
+      camera,
+      EcsRuntime.getCurrent(),
+      hudViewport,
+    );
+    system.render();
+
+    expect(saveCount).toBe(1);
+    expect(restoreCount).toBe(1);
+    expect(setTransformCalls).toHaveLength(1);
+    expect(setTransformCalls[0]?.[0]).toBeCloseTo(2);
+    expect(setTransformCalls[0]?.[3]).toBeCloseTo(2);
+    expect(setTransformCalls[0]?.[4]).toBeCloseTo(0);
+    expect(setTransformCalls[0]?.[5]).toBeCloseTo(100);
+    expect(probe.seen).toEqual(new Vector2D(400, 200));
+  });
+
+  test("recomputes HudViewport transform when canvas size changes", () => {
+    const camera = new CameraEntity();
+    camera.awake();
+
+    const owner = new Node();
+    const probe = new CanvasSizeProbeHudComponent(RenderLayer.HUD);
+    owner.addComponent(probe);
+    owner.awake();
+
+    const setTransformCalls: number[][] = [];
+    const ctx = {
+      save: () => {},
+      restore: () => {},
+      setTransform: (...args: number[]) => {
+        setTransformCalls.push(args);
+      },
+    } as unknown as CanvasRenderingContext2D;
+
+    const canvas = { context: ctx, size: new Vector2D(800, 600) };
+    const hudViewport = new HudViewport(new Vector2D(400, 200), "contain", false);
+    const system = new RenderSystem(canvas, camera, EcsRuntime.getCurrent(), hudViewport);
+
+    system.render();
+    canvas.size = new Vector2D(1200, 600);
+    system.render();
+
+    expect(setTransformCalls).toHaveLength(2);
+    expect(setTransformCalls[0]).toEqual([2, 0, 0, 2, 0, 100]);
+    expect(setTransformCalls[1]).toEqual([3, 0, 0, 3, 0, 0]);
+    expect(probe.seen).toEqual(new Vector2D(400, 200));
   });
 });

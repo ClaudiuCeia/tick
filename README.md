@@ -71,6 +71,7 @@ Run locally:
 - `bun run example:dino-runner`
 - `bun run example:collision-lab`
 - `bun run example:pixel-painter`
+- `bun run example:hud-viewport`
 
 ## Persistence
 
@@ -105,6 +106,35 @@ const runSheet = scope.getSpriteSheet("runner");
 
 // On scene teardown:
 scope.release();
+```
+
+## HUD design space (responsive UI)
+
+`tick` includes a `HudViewport` helper for resolution-independent HUD rendering.
+
+```ts
+import { HudViewport, RenderSystem, Vector2D } from "@claudiu-ceia/tick";
+
+const hud = new HudViewport(new Vector2D(1920, 1080), "contain");
+const renderSystem = new RenderSystem(canvasView, camera, runtime, hud);
+
+// HUD components now render in 1920x1080 design units.
+renderSystem.render();
+```
+
+For pointer input, convert DOM mouse coordinates (`clientX/clientY`) directly into HUD coordinates:
+
+```ts
+const clientPoint = runtime.input.getMousePos();
+const hudPoint = hud.clientToHud(clientPoint, canvasElement);
+```
+
+`HudViewport` supports `"contain"`, `"cover"`, and `"stretch"` fit modes.
+
+For a runnable demo that keeps the same HUD layout across multiple canvas resolutions:
+
+```bash
+bun run example:hud-viewport
 ```
 
 ## Development

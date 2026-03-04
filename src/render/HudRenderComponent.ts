@@ -9,6 +9,10 @@ import type { Vector2D } from "../math/Vector2D.ts";
  * HUD components always pass visibility culling regardless of camera position.
  */
 export abstract class HudRenderComponent<T extends Entity = Entity> extends RenderComponent<T> {
+  public override get isHudComponent(): boolean {
+    return true;
+  }
+
   constructor(zIndex: RenderLayer = RenderLayer.HUD) {
     super(zIndex);
     if (zIndex < RenderLayer.HUD) {

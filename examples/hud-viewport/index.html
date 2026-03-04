@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tick - hud viewport</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "JetBrains Mono", "Fira Code", monospace;
+        background:
+          radial-gradient(circle at 10% 5%, #1f2f45 0%, transparent 35%),
+          radial-gradient(circle at 95% 95%, #3b2332 0%, transparent 30%), #0c1118;
+        color: #dbe9ff;
+      }
+
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.4rem, 2.6vw, 2.2rem);
+      }
+
+      p {
+        margin: 8px 0 0;
+        color: #9fb6d8;
+      }
+
+      .grid {
+        margin-top: 24px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 18px;
+      }
+
+      .panel {
+        background: rgba(11, 16, 24, 0.88);
+        border: 1px solid #314767;
+        border-radius: 12px;
+        padding: 12px;
+      }
+
+      .panel h2 {
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .panel .meta {
+        margin-top: 6px;
+        font-size: 0.82rem;
+        color: #7da0cf;
+      }
+
+      canvas {
+        margin-top: 10px;
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid #324764;
+        background: #070b11;
+        image-rendering: crisp-edges;
+      }
+
+      #wide-canvas {
+        aspect-ratio: 16 / 9;
+      }
+
+      #square-canvas {
+        aspect-ratio: 1 / 1;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>HUD viewport demo (1920x1080 design space)</h1>
+      <p>
+        Move your pointer over either panel. The same HUD is rendered in design units, but mapped to
+        different canvas resolutions.
+      </p>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>Wide canvas (1280x720)</h2>
+          <div class="meta" id="wide-meta"></div>
+          <canvas id="wide-canvas"></canvas>
+        </article>
+
+        <article class="panel">
+          <h2>Square canvas (900x900)</h2>
+          <div class="meta" id="square-meta"></div>
+          <canvas id="square-canvas"></canvas>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
