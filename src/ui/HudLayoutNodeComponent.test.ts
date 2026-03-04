@@ -29,4 +29,17 @@ describe("HudLayoutNodeComponent", () => {
     expect(node.containsHudPoint(new Vector2D(99, 200))).toBe(false);
     expect(node.containsHudPoint(new Vector2D(181, 240))).toBe(false);
   });
+
+  test("stores min and max size constraints", () => {
+    const entity = new Node();
+    const node = new HudLayoutNodeComponent({ width: "fill", height: "50%" });
+    entity.addComponent(node);
+
+    node.setMinMax({ minWidth: 120, maxWidth: 200, minHeight: 24, maxHeight: 60 });
+
+    expect(node.minWidth).toBe(120);
+    expect(node.maxWidth).toBe(200);
+    expect(node.minHeight).toBe(24);
+    expect(node.maxHeight).toBe(60);
+  });
 });

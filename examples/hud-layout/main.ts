@@ -267,7 +267,14 @@ EcsRuntime.runWith(runtime, () => {
 
   const topCenter = makeNode(
     rootNode,
-    { width: "27%", height: 84, anchor: "top-center", offset: { x: 0, y: 18 } },
+    {
+      width: "27%",
+      minWidth: 500,
+      maxWidth: 620,
+      height: 84,
+      anchor: "top-center",
+      offset: { x: 0, y: 18 },
+    },
     (c, frame) => {
       fillRounded(c, frame, 12, "rgba(11, 18, 32, 0.74)");
       strokeRounded(c, frame, 12, "rgba(120, 172, 252, 0.35)");
@@ -381,6 +388,8 @@ EcsRuntime.runWith(runtime, () => {
     rootNode,
     {
       width: "58.3333%",
+      minWidth: 980,
+      maxWidth: 1220,
       height: 232,
       anchor: "bottom-center",
       offset: { x: 0, y: -20 },
@@ -449,7 +458,13 @@ EcsRuntime.runWith(runtime, () => {
     const label = ability.label;
     const accent = ability.accent;
 
-    const slot = makeNode(abilityRow, { width: "fill", height: 148, order: i });
+    const slot = makeNode(abilityRow, {
+      width: "fill",
+      minWidth: 180,
+      maxWidth: 240,
+      height: 148,
+      order: i,
+    });
     const slotNode = slot.getComponent(HudLayoutNodeComponent);
     slot.addComponent(new HudDeckLayoutComponent({ padding: 6 }));
 

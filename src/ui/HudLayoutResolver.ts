@@ -3,13 +3,60 @@ import type { Entity, AbstractComponent } from "../ecs/Entity.ts";
 import { HudDeckLayoutComponent } from "./HudDeckLayoutComponent.ts";
 import { HudLayoutNodeComponent } from "./HudLayoutNodeComponent.ts";
 import { HudStackLayoutComponent } from "./HudStackLayoutComponent.ts";
-import { insetRect, isFillSize, normalizeAnchor, resolveUiSize, type UiRect } from "./types.ts";
+import {
+  insetRect,
+  isFillSize,
+  normalizeAnchor,
+  resolveUiSize,
+  type UiRect,
+  type UiSize,
+} from "./types.ts";
 
 type Constructor<T> = AbstractComponent<T> | { new (...args: unknown[]): T };
+type SizeRange = { min: number; max: number };
+
+const EPS = 0.00001;
 
 const getOptionalComponent = <C>(entity: Entity, constr: Constructor<C>): C | null => {
   if (!entity.hasComponent(constr)) return null;
   return entity.getComponent(constr as Constructor<unknown>) as unknown as C;
+};
+
+const resolveSizeRange = (
+  minSpec: UiSize | undefined,
+  maxSpec: UiSize | undefined,
+  parentSize: number,
+): SizeRange => {
+  const min = minSpec === undefined ? 0 : resolveUiSize(minSpec, parentSize);
+  const maxRaw =
+    maxSpec === undefined ? Number.POSITIVE_INFINITY : resolveUiSize(maxSpec, parentSize);
+  const max = maxRaw < min ? min : maxRaw;
+
+  return { min, max };
+};
+
+const clampToRange = (value: number, range: SizeRange): number => {
+  if (value < range.min) return range.min;
+  if (value > range.max) return range.max;
+  return value;
+};
+
+const resolveConstrainedSize = (spec: UiSize, parentSize: number, range: SizeRange): number => {
+  const value = resolveUiSize(spec, parentSize);
+  return clampToRange(value, range);
+};
+
+const resolveNodeFrameSize = (
+  node: HudLayoutNodeComponent,
+  parentBounds: UiRect,
+): { width: number; height: number } => {
+  const widthRange = resolveSizeRange(node.minWidth, node.maxWidth, parentBounds.width);
+  const heightRange = resolveSizeRange(node.minHeight, node.maxHeight, parentBounds.height);
+
+  return {
+    width: resolveConstrainedSize(node.width, parentBounds.width, widthRange),
+    height: resolveConstrainedSize(node.height, parentBounds.height, heightRange),
+  };
 };
 
 const placeAnchored = (
@@ -70,8 +117,7 @@ const layoutWithDeck = (
     .sort(sortByNodeOrder);
 
   for (const [child, node] of childNodes) {
-    const width = resolveUiSize(node.width, target.width);
-    const height = resolveUiSize(node.height, target.height);
+    const { width, height } = resolveNodeFrameSize(node, target);
     explicitFrames.set(child.id, placeAnchored(target, width, height, node));
   }
 };
@@ -97,22 +143,87 @@ const layoutWithStack = (
   const isRow = container.direction === "row";
   const availableMain = isRow ? target.width : target.height;
   const totalGap = container.gap * Math.max(0, childNodes.length - 1);
+  const crossSize = isRow ? target.height : target.width;
 
-  let fixedMain = 0;
-  let fillMainCount = 0;
-
-  for (const [, node] of childNodes) {
+  const stackNodes = childNodes.map(([child, node]) => {
     const mainSpec = isRow ? node.width : node.height;
-    if (isFillSize(mainSpec)) {
-      fillMainCount++;
+    const crossSpec = isRow ? node.height : node.width;
+
+    const mainRange = isRow
+      ? resolveSizeRange(node.minWidth, node.maxWidth, availableMain)
+      : resolveSizeRange(node.minHeight, node.maxHeight, availableMain);
+
+    const crossRange = isRow
+      ? resolveSizeRange(node.minHeight, node.maxHeight, crossSize)
+      : resolveSizeRange(node.minWidth, node.maxWidth, crossSize);
+
+    return {
+      child,
+      node,
+      mainSpec,
+      crossSpec,
+      mainRange,
+      crossRange,
+    };
+  });
+
+  const fillMain = new Map<string, number>();
+  let fixedMain = 0;
+  const fillItems: Array<(typeof stackNodes)[number]> = [];
+
+  for (const item of stackNodes) {
+    if (isFillSize(item.mainSpec)) {
+      fillItems.push(item);
       continue;
     }
-    fixedMain += resolveUiSize(mainSpec, availableMain);
+    fixedMain += resolveConstrainedSize(item.mainSpec, availableMain, item.mainRange);
   }
 
-  const remaining = Math.max(0, availableMain - totalGap - fixedMain);
-  const fillMainSize = fillMainCount > 0 ? remaining / fillMainCount : 0;
-  const totalMain = fixedMain + fillMainSize * fillMainCount + totalGap;
+  const availableForFill = Math.max(0, availableMain - totalGap - fixedMain);
+  if (fillItems.length > 0) {
+    const totalMin = fillItems.reduce((sum, item) => sum + item.mainRange.min, 0);
+
+    if (totalMin > availableForFill + EPS && totalMin > EPS) {
+      const ratio = availableForFill / totalMin;
+      for (const item of fillItems) {
+        fillMain.set(item.child.id, item.mainRange.min * ratio);
+      }
+    } else {
+      let remaining = availableForFill;
+      for (const item of fillItems) {
+        fillMain.set(item.child.id, item.mainRange.min);
+        remaining -= item.mainRange.min;
+      }
+
+      let active = fillItems.filter(
+        (item) => item.mainRange.max - (fillMain.get(item.child.id) ?? 0) > EPS,
+      );
+
+      while (remaining > EPS && active.length > 0) {
+        const share = remaining / active.length;
+        const nextActive: Array<(typeof stackNodes)[number]> = [];
+
+        for (const item of active) {
+          const current = fillMain.get(item.child.id) ?? 0;
+          const capacity = item.mainRange.max - current;
+          const delta = Math.min(share, capacity);
+          fillMain.set(item.child.id, current + delta);
+          remaining -= delta;
+
+          if (capacity - delta > EPS) {
+            nextActive.push(item);
+          }
+        }
+
+        active = nextActive;
+      }
+    }
+  }
+
+  const totalMain =
+    fixedMain +
+    totalGap +
+    fillItems.reduce((sum, item) => sum + (fillMain.get(item.child.id) ?? 0), 0);
 
   let cursor = isRow ? target.x : target.y;
   if (container.mainAlign === "center") {
@@ -122,14 +233,16 @@ const layoutWithStack = (
   }
 
   const crossStart = isRow ? target.y : target.x;
-  const crossSize = isRow ? target.height : target.width;
 
-  for (const [child, node] of childNodes) {
-    const mainSpec = isRow ? node.width : node.height;
-    const mainSize = isFillSize(mainSpec) ? fillMainSize : resolveUiSize(mainSpec, availableMain);
+  for (const item of stackNodes) {
+    const { child, node, mainSpec, crossSpec, mainRange, crossRange } = item;
+    const mainSize = isFillSize(mainSpec)
+      ? (fillMain.get(child.id) ?? 0)
+      : resolveConstrainedSize(mainSpec, availableMain, mainRange);
 
-    const rawCrossSize = resolveUiSize(isRow ? node.height : node.width, crossSize);
-    const resolvedCrossSize = container.crossAlign === "stretch" ? crossSize : rawCrossSize;
+    const rawCrossSize = resolveConstrainedSize(crossSpec, crossSize, crossRange);
+    const resolvedCrossSize =
+      container.crossAlign === "stretch" ? clampToRange(crossSize, crossRange) : rawCrossSize;
 
     let crossPos = crossStart;
     if (container.crossAlign === "center") {
@@ -166,8 +279,7 @@ const resolveEntityLayout = (
 
   const ownBounds = node
     ? (() => {
-        const width = resolveUiSize(node.width, parentBounds.width);
-        const height = resolveUiSize(node.height, parentBounds.height);
+        const { width, height } = resolveNodeFrameSize(node, parentBounds);
         const frame = explicitFrame ?? placeAnchored(parentBounds, width, height, node);
         node.setResolvedFrame(frame);
         return frame;

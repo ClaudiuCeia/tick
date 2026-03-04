@@ -6,6 +6,10 @@ import type { UiAnchor, UiRect, UiSize } from "./types.ts";
 export type HudLayoutNodeOptions = {
   width: UiSize;
   height: UiSize;
+  minWidth?: UiSize;
+  maxWidth?: UiSize;
+  minHeight?: UiSize;
+  maxHeight?: UiSize;
   anchor?: UiAnchor;
   offset?: Vector2D | { x: number; y: number };
   order?: number;
@@ -14,6 +18,10 @@ export type HudLayoutNodeOptions = {
 export class HudLayoutNodeComponent<T extends Entity = Entity> extends Component<T> {
   public width: UiSize;
   public height: UiSize;
+  public minWidth?: UiSize;
+  public maxWidth?: UiSize;
+  public minHeight?: UiSize;
+  public maxHeight?: UiSize;
   public anchor: UiAnchor;
   public order: number;
   public offset: Vector2D;
@@ -24,6 +32,10 @@ export class HudLayoutNodeComponent<T extends Entity = Entity> extends Component
     super();
     this.width = options.width;
     this.height = options.height;
+    this.minWidth = options.minWidth;
+    this.maxWidth = options.maxWidth;
+    this.minHeight = options.minHeight;
+    this.maxHeight = options.maxHeight;
     this.anchor = options.anchor ?? "top-left";
     this.order = options.order ?? 0;
 
@@ -34,6 +46,19 @@ export class HudLayoutNodeComponent<T extends Entity = Entity> extends Component
   public setSize(width: UiSize, height: UiSize): this {
     this.width = width;
     this.height = height;
+    return this;
+  }
+
+  public setMinMax(options: {
+    minWidth?: UiSize;
+    maxWidth?: UiSize;
+    minHeight?: UiSize;
+    maxHeight?: UiSize;
+  }): this {
+    this.minWidth = options.minWidth;
+    this.maxWidth = options.maxWidth;
+    this.minHeight = options.minHeight;
+    this.maxHeight = options.maxHeight;
     return this;
   }
 

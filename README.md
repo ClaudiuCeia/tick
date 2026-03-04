@@ -162,6 +162,8 @@ slot.addComponent(
   new HudLayoutNodeComponent({
     width: "fill", // split remaining main-axis space among fill siblings
     height: "fill", // in deck/cross-axis contexts: use full available size
+    minWidth: 180,
+    maxWidth: 260,
   }),
 );
 ```

@@ -69,6 +69,29 @@ describe("resolveHudLayout", () => {
     });
   });
 
+  test("applies min and max constraints on anchored nodes", () => {
+    const runtime = new EcsRuntime(new EntityRegistry());
+
+    EcsRuntime.runWith(runtime, () => {
+      const nodeEntity = new Node();
+      const node = new HudLayoutNodeComponent({
+        width: "80%",
+        minWidth: 120,
+        maxWidth: 200,
+        height: "fill",
+        minHeight: 60,
+        maxHeight: 100,
+        anchor: "center",
+      });
+      nodeEntity.addComponent(node);
+      nodeEntity.awake();
+
+      resolveHudLayout(runtime, { x: 0, y: 0, width: 300, height: 160 });
+
+      expect(node.getFrame()).toEqual({ x: 50, y: 30, width: 200, height: 100 });
+    });
+  });
+
   test("supports fill and percent sizing in stack layout", () => {
     const runtime = new EcsRuntime(new EntityRegistry());
 
