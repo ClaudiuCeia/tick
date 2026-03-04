@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tick - hud layout rpg</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        overflow: hidden;
+        font-family: "Rajdhani", "Trebuchet MS", sans-serif;
+        background:
+          radial-gradient(circle at 20% 10%, #2f2240 0%, transparent 32%),
+          radial-gradient(circle at 85% 90%, #1b3146 0%, transparent 30%), #090d14;
+      }
+
+      #hud-canvas {
+        width: 100vw;
+        height: 100vh;
+        display: block;
+      }
+
+      .hint {
+        position: fixed;
+        top: 14px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 8px 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(124, 160, 255, 0.38);
+        background: rgba(9, 13, 20, 0.72);
+        color: #cfe0ff;
+        font-size: 0.92rem;
+        letter-spacing: 0.02em;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="hud-canvas"></canvas>
+    <div class="hint">Resize the window. HUD layout stays stable in 1920x1080 design space.</div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

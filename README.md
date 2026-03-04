@@ -72,6 +72,7 @@ Run locally:
 - `bun run example:collision-lab`
 - `bun run example:pixel-painter`
 - `bun run example:hud-viewport`
+- `bun run example:hud-layout`
 
 ## Persistence
 
@@ -131,10 +132,50 @@ const hudPoint = hud.clientToHud(clientPoint, canvasElement);
 
 `HudViewport` supports `"contain"`, `"cover"`, and `"stretch"` fit modes.
 
+For HUD layout composition, use `HudLayoutNodeComponent` + `HudDeckLayoutComponent` /
+`HudStackLayoutComponent`:
+
+```ts
+const panel = new Entity();
+panel.addComponent(
+  new HudLayoutNodeComponent({
+    width: 360,
+    height: 140,
+    anchor: "bottom-center",
+    offset: { x: 0, y: -20 },
+  }),
+);
+panel.addComponent(new HudDeckLayoutComponent({ padding: 10 }));
+
+const row = new Entity();
+row.addComponent(
+  new HudLayoutNodeComponent({
+    width: "95%", // percentage of parent frame
+    height: 72,
+    anchor: "bottom-center",
+  }),
+);
+row.addComponent(new HudStackLayoutComponent({ direction: "row", gap: 10 }));
+
+const slot = new Entity();
+slot.addComponent(
+  new HudLayoutNodeComponent({
+    width: "fill", // split remaining main-axis space among fill siblings
+    height: "fill", // in deck/cross-axis contexts: use full available size
+  }),
+);
+```
+
 For a runnable demo that keeps the same HUD layout across multiple canvas resolutions:
 
 ```bash
 bun run example:hud-viewport
+```
+
+For a larger RPG/MOBA-style HUD with nested deck/stack nodes:
+
+```bash
+bun run example:hud-layout
 ```
 
 ## Development

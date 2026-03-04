@@ -12,6 +12,7 @@ import { HudViewport } from "./HudViewport.ts";
 import { RenderLayer } from "./RenderLayer.ts";
 import { RenderSystem } from "./RenderSystem.ts";
 import type { ICamera } from "./ICamera.ts";
+import { HudLayoutNodeComponent } from "../ui/HudLayoutNodeComponent.ts";
 
 class Node extends Entity {}
 
@@ -72,6 +73,15 @@ class CanvasSizeProbeHudComponent extends HudRenderComponent<Node> {
 
   override doRender(_ctx: CanvasRenderingContext2D, _camera: ICamera, canvasSize: Vector2D): void {
     this.seen = canvasSize;
+  }
+}
+
+class LayoutFrameProbeHudComponent extends HudRenderComponent<Node> {
+  public seenFrame: { x: number; y: number; width: number; height: number } | null = null;
+
+  override doRender(): void {
+    const node = this.ent.getComponent(HudLayoutNodeComponent);
+    this.seenFrame = node.getFrame();
   }
 }
 
@@ -301,5 +311,47 @@ describe("RenderSystem ordering and registration", () => {
     expect(setTransformCalls[0]).toEqual([2, 0, 0, 2, 0, 100]);
     expect(setTransformCalls[1]).toEqual([3, 0, 0, 3, 0, 0]);
     expect(probe.seen).toEqual(new Vector2D(400, 200));
+  });
+
+  test("resolves hud layout before HUD component render", () => {
+    const camera = new CameraEntity();
+    camera.awake();
+
+    const root = new Node();
+    const rootLayout = new HudLayoutNodeComponent({ width: 400, height: 200, anchor: "center" });
+    root.addComponent(rootLayout);
+
+    const child = new Node();
+    const childLayout = new HudLayoutNodeComponent({
+      width: 100,
+      height: 50,
+      anchor: "bottom-right",
+      offset: { x: -10, y: -10 },
+    });
+    child.addComponent(childLayout);
+
+    const probe = new LayoutFrameProbeHudComponent(RenderLayer.HUD);
+    child.addComponent(probe);
+
+    root.addChild(child);
+    root.awake();
+
+    const ctx = {
+      save: () => {},
+      restore: () => {},
+      setTransform: () => {},
+    } as unknown as CanvasRenderingContext2D;
+
+    const hudViewport = new HudViewport(new Vector2D(400, 200), "contain", false);
+    const system = new RenderSystem(
+      { context: ctx, size: new Vector2D(1000, 700) },
+      camera,
+      EcsRuntime.getCurrent(),
+      hudViewport,
+    );
+
+    system.render();
+
+    expect(probe.seenFrame).toEqual({ x: 290, y: 140, width: 100, height: 50 });
   });
 });

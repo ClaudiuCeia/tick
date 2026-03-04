@@ -4,6 +4,7 @@ export * from "./math/index.ts";
 export * from "./transform/index.ts";
 export * from "./collision/index.ts";
 export * from "./render/index.ts";
+export * from "./ui/index.ts";
 export * from "./scene/index.ts";
 export * from "./input/index.ts";
 export * from "./world/index.ts";

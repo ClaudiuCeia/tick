@@ -4,6 +4,7 @@ import { RenderLayer } from "./RenderLayer.ts";
 import type { Vector2D } from "../math/Vector2D.ts";
 import { EcsRuntime } from "../ecs/EcsRuntime.ts";
 import type { HudViewport } from "./HudViewport.ts";
+import { resolveHudLayout } from "../ui/HudLayoutResolver.ts";
 
 export interface ICanvas {
   context: CanvasRenderingContext2D;
@@ -86,6 +87,13 @@ export class RenderSystem {
     const { context: ctx } = this.canvas;
     const canvasSize = this.canvas.size;
     this.hudViewport?.setCanvasSize(canvasSize);
+
+    resolveHudLayout(this.runtime, {
+      x: 0,
+      y: 0,
+      width: this.hudViewport ? this.hudViewport.refSize.x : canvasSize.x,
+      height: this.hudViewport ? this.hudViewport.refSize.y : canvasSize.y,
+    });
 
     const hud: RenderComponent[] = [];
     const renderables = RenderSystem.getRenderables(this.runtime);
