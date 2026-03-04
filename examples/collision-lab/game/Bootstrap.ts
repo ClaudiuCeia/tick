@@ -8,6 +8,7 @@ import {
   type ICanvas,
 } from "./lib.ts";
 import { CollisionLabScene } from "./scenes/CollisionLabScene.ts";
+import { WorldLoop } from "../../shared/WorldLoop.ts";
 
 const LAYERS = [1, 2, 4, 8];
 
@@ -87,12 +88,6 @@ export const bootstrapCollisionLab = (): void => {
   const world = new World({ runtime, fixedDeltaTime: 1 / 120, maxSubSteps: 8 });
 
   world.addSystem({
-    phase: SystemPhase.Input,
-    tickMode: SystemTickMode.Frame,
-    update() {},
-  });
-
-  world.addSystem({
     phase: SystemPhase.Simulation,
     tickMode: SystemTickMode.Fixed,
     update(dt) {
@@ -119,15 +114,14 @@ export const bootstrapCollisionLab = (): void => {
     },
   });
 
-  let lastTs = performance.now();
-  const frame = (now: number): void => {
-    const dt = Math.min(0.05, (now - lastTs) / 1000);
-    lastTs = now;
-    const rect = canvas.getBoundingClientRect();
-    scene.setPointerOffset(rect.left, rect.top);
-    world.step(dt);
-    requestAnimationFrame(frame);
-  };
+  world.addSystem({
+    phase: SystemPhase.Input,
+    tickMode: SystemTickMode.Frame,
+    update() {
+      const rect = canvas.getBoundingClientRect();
+      scene.setPointerOffset(rect.left, rect.top);
+    },
+  });
 
-  requestAnimationFrame(frame);
+  new WorldLoop(world);
 };

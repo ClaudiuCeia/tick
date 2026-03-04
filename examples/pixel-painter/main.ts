@@ -1,4 +1,12 @@
-import { Component, EcsRuntime, Entity } from "../../src/index.ts";
+import {
+  Component,
+  EcsRuntime,
+  Entity,
+  SystemPhase,
+  SystemTickMode,
+  World,
+} from "../../src/index.ts";
+import { WorldLoop } from "../shared/WorldLoop.ts";
 
 const GRID_SIZE = 40;
 const STORAGE_KEY = "tick:pixel-painter:v1";
@@ -81,6 +89,7 @@ if (!ctx) {
 }
 
 const runtime = new EcsRuntime();
+runtime.input.init(window);
 const boardEntity = EcsRuntime.runWith(runtime, () => {
   const ent = new PixelBoardEntity();
   ent.awake();
@@ -90,6 +99,7 @@ const board = boardEntity.board;
 
 const cellSize = canvas.width / GRID_SIZE;
 let isPainting = false;
+let needsRender = true;
 
 const loadFromLocalStorage = (): void => {
   const raw = localStorage.getItem(STORAGE_KEY);
@@ -160,14 +170,14 @@ const paintAt = (event: MouseEvent): void => {
   next[idx] = { on: true, color };
   board.setState(next);
   autosave();
-  draw();
+  needsRender = true;
 };
 
 clearButton.addEventListener("click", () => {
   board.clear();
   localStorage.removeItem(STORAGE_KEY);
   statusEl.textContent = "Cleared";
-  draw();
+  needsRender = true;
 });
 
 canvas.addEventListener("mousedown", (event) => {
@@ -185,4 +195,26 @@ window.addEventListener("mouseup", () => {
 });
 
 loadFromLocalStorage();
-draw();
+needsRender = true;
+
+const world = new World({ runtime, fixedDeltaTime: 1 / 120, maxSubSteps: 8 });
+
+world.addSystem({
+  phase: SystemPhase.Input,
+  tickMode: SystemTickMode.Frame,
+  update() {},
+});
+
+world.addSystem({
+  phase: SystemPhase.Render,
+  tickMode: SystemTickMode.Frame,
+  update() {
+    if (needsRender) {
+      draw();
+      needsRender = false;
+    }
+    runtime.input.clearFrame();
+  },
+});
+
+new WorldLoop(world);

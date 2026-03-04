@@ -5,6 +5,8 @@ import type { Vector2D } from "../math/Vector2D.ts";
 import { EcsRuntime } from "../ecs/EcsRuntime.ts";
 import type { HudViewport } from "./HudViewport.ts";
 import { resolveHudLayout } from "../ui/HudLayoutResolver.ts";
+import { HudLayoutNodeComponent } from "../ui/HudLayoutNodeComponent.ts";
+import { HudInputRouter } from "../ui/HudInputRouter.ts";
 
 export interface ICanvas {
   context: CanvasRenderingContext2D;
@@ -88,6 +90,19 @@ export class RenderSystem {
     const canvasSize = this.canvas.size;
     this.hudViewport?.setCanvasSize(canvasSize);
 
+    let canvasElement: HTMLCanvasElement | null = null;
+    if (typeof HTMLCanvasElement !== "undefined" && "canvas" in ctx) {
+      const maybeCanvas = (ctx as CanvasRenderingContext2D).canvas;
+      if (maybeCanvas instanceof HTMLCanvasElement) {
+        canvasElement = maybeCanvas;
+      }
+    }
+
+    HudInputRouter.configure(this.runtime, {
+      canvasElement,
+      hudViewport: this.hudViewport,
+    });
+
     resolveHudLayout(this.runtime, {
       x: 0,
       y: 0,
@@ -110,6 +125,13 @@ export class RenderSystem {
     }
 
     for (const comp of hud) {
+      if (comp.ent.hasComponent(HudLayoutNodeComponent)) {
+        const node = comp.ent.getComponent(HudLayoutNodeComponent);
+        if (!node.visible) {
+          continue;
+        }
+      }
+
       if (this.hudViewport && comp.isHudComponent) {
         ctx.save();
         this.hudViewport.applyTo(ctx);

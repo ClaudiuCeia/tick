@@ -354,4 +354,23 @@ describe("RenderSystem ordering and registration", () => {
 
     expect(probe.seenFrame).toEqual({ x: 290, y: 140, width: 100, height: 50 });
   });
+
+  test("skips HUD render when layout node is hidden", () => {
+    const camera = new CameraEntity();
+    camera.awake();
+
+    const owner = new Node();
+    const layout = new HudLayoutNodeComponent({ width: 100, height: 50 });
+    layout.visible = false;
+    owner.addComponent(layout);
+
+    const probe = new CanvasSizeProbeHudComponent(RenderLayer.HUD);
+    owner.addComponent(probe);
+    owner.awake();
+
+    const system = new RenderSystem({ context: createCtx(), size: new Vector2D(321, 123) }, camera);
+    system.render();
+
+    expect(probe.seen).toBeNull();
+  });
 });

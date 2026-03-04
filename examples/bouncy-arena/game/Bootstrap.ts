@@ -9,6 +9,7 @@ import {
   type ICanvas,
 } from "./lib.ts";
 import { ArenaScene } from "./scenes/ArenaScene.ts";
+import { WorldLoop } from "../../shared/WorldLoop.ts";
 
 const createCanvas = (): HTMLCanvasElement => {
   const canvas = document.createElement("canvas");
@@ -81,16 +82,5 @@ export const bootstrapBouncyArena = (mount: HTMLElement = document.body): void =
     },
   });
 
-  let lastTs = performance.now();
-
-  const frame = (now: number): void => {
-    const dt = Math.min(0.05, (now - lastTs) / 1000);
-    lastTs = now;
-
-    world.step(dt);
-
-    requestAnimationFrame(frame);
-  };
-
-  requestAnimationFrame(frame);
+  new WorldLoop(world);
 };

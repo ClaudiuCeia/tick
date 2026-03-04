@@ -2,17 +2,23 @@ import {
   EcsRuntime,
   Entity,
   HudDeckLayoutComponent,
+  HudInputComponent,
+  type HudInputEvent,
   HudLayoutNodeComponent,
   HudRenderComponent,
   HudStackLayoutComponent,
   HudViewport,
   RenderLayer,
   RenderSystem,
+  SystemPhase,
+  SystemTickMode,
   Vector2D,
+  World,
   type ICamera,
   type ICanvas,
   type UiRect,
 } from "../../index.ts";
+import { WorldLoop } from "../shared/WorldLoop.ts";
 
 const DESIGN_SIZE = new Vector2D(1920, 1080);
 
@@ -20,6 +26,7 @@ type DemoState = {
   t: number;
   pointerHud: Vector2D | null;
   hoveredAbility: number | null;
+  selectedAbility: number | null;
   hp: number;
   mp: number;
   gold: number;
@@ -54,6 +61,86 @@ class PaintHudComponent extends HudRenderComponent<HudNodeEntity> {
     if (!frame) return;
 
     this.paint(ctx, frame, this.readState());
+  }
+}
+
+class AbilitySlotInputComponent extends HudInputComponent<HudNodeEntity> {
+  constructor(
+    private readonly slotIndex: number,
+    private readonly state: DemoState,
+  ) {
+    super();
+    this.focusable = true;
+    this.priority = 20;
+  }
+
+  protected override onPointerEnter(): void {
+    this.state.hoveredAbility = this.slotIndex;
+  }
+
+  protected override onPointerLeave(): void {
+    if (this.state.hoveredAbility === this.slotIndex) {
+      this.state.hoveredAbility = null;
+    }
+  }
+
+  protected override onPointerDown(event: HudInputEvent): void {
+    this.state.hoveredAbility = this.slotIndex;
+    this.state.selectedAbility = this.slotIndex;
+    event.stopPropagation();
+  }
+
+  protected override onTouchStart(event: HudInputEvent): void {
+    this.state.hoveredAbility = this.slotIndex;
+    this.state.selectedAbility = this.slotIndex;
+    event.stopPropagation();
+  }
+
+  protected override onKeyDown(event: HudInputEvent): void {
+    if (event.key === "Enter" || event.key === " ") {
+      this.state.selectedAbility = this.slotIndex;
+      this.state.hoveredAbility = this.slotIndex;
+      event.stopPropagation();
+    }
+  }
+}
+
+class AbilityBarInputComponent extends HudInputComponent<HudNodeEntity> {
+  constructor(private readonly state: DemoState) {
+    super();
+    this.priority = -5;
+  }
+
+  protected override onPointerDown(): void {
+    this.state.hoveredAbility = null;
+    this.state.selectedAbility = null;
+  }
+}
+
+class GlobalHudKeyboardInputComponent extends HudInputComponent<HudNodeEntity> {
+  constructor(
+    private readonly state: DemoState,
+    private readonly keys: readonly string[],
+  ) {
+    super();
+    this.keyboardMode = "global";
+    this.priority = -10;
+  }
+
+  protected override onKeyDown(event: HudInputEvent): void {
+    const key = event.key?.toLowerCase() ?? "";
+    const hit = this.keys.findIndex((entry) => entry.toLowerCase() === key);
+    if (hit !== -1) {
+      this.state.selectedAbility = hit;
+      this.state.hoveredAbility = hit;
+      event.stopPropagation();
+      return;
+    }
+
+    if (key === "escape") {
+      this.state.selectedAbility = null;
+      this.state.hoveredAbility = null;
+    }
   }
 }
 
@@ -129,18 +216,33 @@ const state: DemoState = {
   t: 0,
   pointerHud: null,
   hoveredAbility: null,
+  selectedAbility: null,
   hp: 0.84,
   mp: 0.72,
   gold: 420,
   objectiveTimer: 240,
 };
 
-EcsRuntime.runWith(runtime, () => {
+const ABILITY_DEFS = [
+  { key: "Q", label: "Volley", accent: "#7ecbff" },
+  { key: "W", label: "Dash", accent: "#81f2b6" },
+  { key: "E", label: "Trap", accent: "#f9d46c" },
+  { key: "R", label: "Tempest", accent: "#ff8ca8" },
+  { key: "D", label: "Relic", accent: "#b79fff" },
+] as const;
+
+const hudRefs = EcsRuntime.runWith(runtime, () => {
   const rootNode = new HudNodeEntity();
   rootNode.addComponent(
     new HudLayoutNodeComponent({ width: DESIGN_SIZE.x, height: DESIGN_SIZE.y, anchor: "top-left" }),
   );
   rootNode.addComponent(new HudDeckLayoutComponent());
+  rootNode.addComponent(
+    new GlobalHudKeyboardInputComponent(
+      state,
+      ABILITY_DEFS.map((entry) => entry.key),
+    ),
+  );
 
   const makeNode = (
     parent: Entity,
@@ -445,15 +547,7 @@ EcsRuntime.runWith(runtime, () => {
     }),
   );
 
-  const abilities = [
-    { key: "Q", label: "Volley", accent: "#7ecbff" },
-    { key: "W", label: "Dash", accent: "#81f2b6" },
-    { key: "E", label: "Trap", accent: "#f9d46c" },
-    { key: "R", label: "Tempest", accent: "#ff8ca8" },
-    { key: "D", label: "Relic", accent: "#b79fff" },
-  ] as const;
-
-  for (const [i, ability] of abilities.entries()) {
+  for (const [i, ability] of ABILITY_DEFS.entries()) {
     const key = ability.key;
     const label = ability.label;
     const accent = ability.accent;
@@ -465,12 +559,11 @@ EcsRuntime.runWith(runtime, () => {
       height: 148,
       order: i,
     });
-    const slotNode = slot.getComponent(HudLayoutNodeComponent);
     slot.addComponent(new HudDeckLayoutComponent({ padding: 6 }));
+    slot.addComponent(new AbilitySlotInputComponent(i, state));
 
     makeNode(slot, { width: "fill", height: "fill", anchor: "center" }, (c, frame, s) => {
-      const hovered = s.pointerHud ? slotNode.containsHudPoint(s.pointerHud) : false;
-      if (hovered) s.hoveredAbility = i;
+      const hovered = s.hoveredAbility === i || s.selectedAbility === i;
 
       fillRounded(c, frame, 10, hovered ? "rgba(30, 51, 77, 0.96)" : "rgba(20, 33, 52, 0.92)");
       strokeRounded(
@@ -543,7 +636,8 @@ EcsRuntime.runWith(runtime, () => {
     rootNode,
     { width: 360, height: 64, anchor: "bottom-center", offset: { x: 0, y: -264 } },
     (c, frame, s) => {
-      if (s.hoveredAbility === null) return;
+      const activeIndex = s.hoveredAbility ?? s.selectedAbility;
+      if (activeIndex === null) return;
 
       fillRounded(c, frame, 10, "rgba(9, 14, 22, 0.88)");
       strokeRounded(c, frame, 10, "rgba(136, 189, 255, 0.5)", 2);
@@ -551,7 +645,7 @@ EcsRuntime.runWith(runtime, () => {
       c.font = '600 24px "Rajdhani", sans-serif';
       c.textAlign = "center";
       c.textBaseline = "middle";
-      const active = abilities[s.hoveredAbility];
+      const active = ABILITY_DEFS[activeIndex];
       if (!active) return;
       c.fillText(
         `Ability ${active.key} - ${active.label}`,
@@ -564,10 +658,15 @@ EcsRuntime.runWith(runtime, () => {
     },
   );
   tooltip.addComponent(new HudDeckLayoutComponent());
+  const tooltipNode = tooltip.getComponent(HudLayoutNodeComponent);
+  tooltipNode.setInteractive(false);
+  tooltipNode.setVisible(false);
+
+  abilityRoot.addComponent(new AbilityBarInputComponent(state));
 
   rootNode.awake();
 
-  return rootNode;
+  return { tooltipNode };
 });
 
 const drawBackdrop = (c: CanvasRenderingContext2D, width: number, height: number): void => {
@@ -617,38 +716,55 @@ const resizeCanvas = (): void => {
 resizeCanvas();
 window.addEventListener("resize", resizeCanvas);
 
-let last = performance.now();
+const world = new World({ runtime, fixedDeltaTime: 1 / 120, maxSubSteps: 8 });
 
-const frame = (now: number): void => {
-  const dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
-  state.t += dt;
-  state.hoveredAbility = null;
+world.addSystem({
+  phase: SystemPhase.Input,
+  tickMode: SystemTickMode.Frame,
+  update() {
+    if (pointerInside) {
+      state.pointerHud = hudViewport.clientToHud(runtime.input.getMousePos(), canvas);
+    } else {
+      state.pointerHud = null;
+      if (state.selectedAbility === null) {
+        state.hoveredAbility = null;
+      }
+    }
 
-  state.hp = 0.82 + Math.sin(state.t * 0.5) * 0.09;
-  state.mp = 0.74 + Math.cos(state.t * 0.35) * 0.08;
-  state.gold += dt * (state.hoveredAbility === null ? 1.2 : 2.1);
-  state.objectiveTimer = (state.objectiveTimer - dt + 240) % 240 || 240;
+    hudRefs.tooltipNode.setVisible(state.hoveredAbility !== null || state.selectedAbility !== null);
+  },
+});
 
-  if (pointerInside) {
-    state.pointerHud = hudViewport.clientToHud(runtime.input.getMousePos(), canvas);
-  } else {
-    state.pointerHud = null;
-  }
+world.addSystem({
+  phase: SystemPhase.Simulation,
+  tickMode: SystemTickMode.Frame,
+  update(dt) {
+    state.t += dt;
+    state.hp = 0.82 + Math.sin(state.t * 0.5) * 0.09;
+    state.mp = 0.74 + Math.cos(state.t * 0.35) * 0.08;
+    state.gold +=
+      dt * (state.hoveredAbility === null && state.selectedAbility === null ? 1.2 : 2.1);
+    state.objectiveTimer = (state.objectiveTimer - dt + 240) % 240 || 240;
+  },
+});
 
-  drawBackdrop(ctx, canvas.width, canvas.height);
-  renderSystem.render();
+world.addSystem({
+  phase: SystemPhase.Render,
+  tickMode: SystemTickMode.Frame,
+  update() {
+    drawBackdrop(ctx, canvas.width, canvas.height);
+    renderSystem.render();
 
-  if (state.pointerHud) {
-    const pointer = hudViewport.hudToScreen(state.pointerHud);
-    ctx.fillStyle = "rgba(182, 223, 255, 0.86)";
-    ctx.beginPath();
-    ctx.arc(pointer.x, pointer.y, 4, 0, Math.PI * 2);
-    ctx.fill();
-  }
+    if (state.pointerHud) {
+      const pointer = hudViewport.hudToScreen(state.pointerHud);
+      ctx.fillStyle = "rgba(182, 223, 255, 0.86)";
+      ctx.beginPath();
+      ctx.arc(pointer.x, pointer.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
-  runtime.input.clearFrame();
-  requestAnimationFrame(frame);
-};
+    runtime.input.clearFrame();
+  },
+});
 
-requestAnimationFrame(frame);
+new WorldLoop(world);

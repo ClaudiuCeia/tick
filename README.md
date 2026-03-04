@@ -166,6 +166,17 @@ slot.addComponent(
     maxWidth: 260,
   }),
 );
+
+// Optional input hooks on a HUD entity
+class AbilityInput extends HudInputComponent {
+  protected override onPointerDown(e: HudInputEvent): void {
+    e.stopPropagation();
+  }
+
+  protected override onKeyDown(e: HudInputEvent): void {
+    // focused or global based on this.keyboardMode
+  }
+}
 ```
 
 For a runnable demo that keeps the same HUD layout across multiple canvas resolutions:

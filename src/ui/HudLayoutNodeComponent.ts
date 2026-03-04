@@ -25,6 +25,8 @@ export class HudLayoutNodeComponent<T extends Entity = Entity> extends Component
   public anchor: UiAnchor;
   public order: number;
   public offset: Vector2D;
+  public visible = true;
+  public interactive = true;
 
   private resolvedFrame: UiRect | null = null;
 
@@ -74,6 +76,16 @@ export class HudLayoutNodeComponent<T extends Entity = Entity> extends Component
 
   public setOrder(order: number): this {
     this.order = order;
+    return this;
+  }
+
+  public setVisible(visible: boolean): this {
+    this.visible = visible;
+    return this;
+  }
+
+  public setInteractive(interactive: boolean): this {
+    this.interactive = interactive;
     return this;
   }
 

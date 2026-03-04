@@ -10,6 +10,7 @@ import {
 } from "./lib.ts";
 import { loadRunnerAssets } from "./assets.ts";
 import { RunnerScene } from "./scenes/RunnerScene.ts";
+import { WorldLoop } from "../../shared/WorldLoop.ts";
 
 const DISPLAY_WIDTH = 1024;
 const DISPLAY_HEIGHT = 576;
@@ -100,16 +101,5 @@ export const bootstrapDinoRunner = async (
     },
   });
 
-  let lastTs = performance.now();
-
-  const frame = (now: number): void => {
-    const dt = Math.min(0.05, (now - lastTs) / 1000);
-    lastTs = now;
-
-    world.step(dt);
-
-    requestAnimationFrame(frame);
-  };
-
-  requestAnimationFrame(frame);
+  new WorldLoop(world);
 };
