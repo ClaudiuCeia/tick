@@ -336,7 +336,7 @@ class HudInputRouterImpl {
           type === "wheel"
         ) {
           state.capturedPointerEvents.add(type);
-          if (options.nativeEvent instanceof WheelEvent) {
+          if (typeof WheelEvent !== "undefined" && options.nativeEvent instanceof WheelEvent) {
             options.nativeEvent.preventDefault();
             options.nativeEvent.stopPropagation();
           }
