@@ -31,6 +31,12 @@ type RuntimeState = {
   hudViewport: HudViewport | null;
   canvasElement: HTMLCanvasElement | null;
   handlers: AttachedHandlers | null;
+  capturedPointerEvents: Set<
+    Extract<
+      HudInputEventType,
+      "pointermove" | "pointerdown" | "pointerup" | "click" | "wheel"
+    >
+  >;
 };
 
 const clientToCanvas = (point: Vector2D, canvas: HTMLCanvasElement): Vector2D => {
@@ -72,6 +78,7 @@ class HudInputRouterImpl {
         hudViewport: null,
         canvasElement: null,
         handlers: null,
+        capturedPointerEvents: new Set(),
       };
       this.states.set(runtime, state);
     }
@@ -257,6 +264,16 @@ class HudInputRouterImpl {
     return this.getState(runtime).focusedId === component.ent.id;
   }
 
+  public consumePointerCapture(
+    runtime: EcsRuntime,
+    type: Extract<HudInputEventType, "pointermove" | "pointerdown" | "pointerup" | "click" | "wheel">,
+  ): boolean {
+    const state = this.getState(runtime);
+    const captured = state.capturedPointerEvents.has(type);
+    state.capturedPointerEvents.delete(type);
+    return captured;
+  }
+
   public routePointer(
     runtime: EcsRuntime,
     type: Extract<
@@ -311,6 +328,19 @@ class HudInputRouterImpl {
       }
 
       if (event.propagationStopped) {
+        if (
+          type === "pointermove" ||
+          type === "pointerdown" ||
+          type === "pointerup" ||
+          type === "click" ||
+          type === "wheel"
+        ) {
+          state.capturedPointerEvents.add(type);
+          if (options.nativeEvent instanceof WheelEvent) {
+            options.nativeEvent.preventDefault();
+            options.nativeEvent.stopPropagation();
+          }
+        }
         break;
       }
     }
