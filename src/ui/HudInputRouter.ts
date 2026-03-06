@@ -32,10 +32,7 @@ type RuntimeState = {
   canvasElement: HTMLCanvasElement | null;
   handlers: AttachedHandlers | null;
   capturedPointerEvents: Set<
-    Extract<
-      HudInputEventType,
-      "pointermove" | "pointerdown" | "pointerup" | "click" | "wheel"
-    >
+    Extract<HudInputEventType, "pointermove" | "pointerdown" | "pointerup" | "click" | "wheel">
   >;
 };
 
@@ -266,7 +263,10 @@ class HudInputRouterImpl {
 
   public consumePointerCapture(
     runtime: EcsRuntime,
-    type: Extract<HudInputEventType, "pointermove" | "pointerdown" | "pointerup" | "click" | "wheel">,
+    type: Extract<
+      HudInputEventType,
+      "pointermove" | "pointerdown" | "pointerup" | "click" | "wheel"
+    >,
   ): boolean {
     const state = this.getState(runtime);
     const captured = state.capturedPointerEvents.has(type);
