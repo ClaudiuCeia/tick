@@ -347,7 +347,6 @@ describe("HudInputRouter", () => {
 
   test("consumed HUD keyboard events do not reach InputManager", () => {
     const runtime = new EcsRuntime(new EntityRegistry());
-    const target = new FakeEventTarget() as unknown as EventTarget;
     const fakeWindow = new FakeEventTarget() as unknown as Window;
 
     EcsRuntime.runWith(runtime, () => {
