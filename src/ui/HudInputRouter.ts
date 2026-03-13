@@ -36,6 +36,10 @@ type RuntimeState = {
   >;
 };
 
+type NativeConsumableEvent = Event & {
+  stopImmediatePropagation?: () => void;
+};
+
 const clientToCanvas = (point: Vector2D, canvas: HTMLCanvasElement): Vector2D => {
   const rect = canvas.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) {
@@ -64,6 +68,15 @@ const makeEvent = (
 
 class HudInputRouterImpl {
   private states = new WeakMap<EcsRuntime, RuntimeState>();
+
+  private consumeNativeEvent(event?: Event): void {
+    if (!event) return;
+
+    const nativeEvent = event as NativeConsumableEvent;
+    event.preventDefault();
+    event.stopPropagation();
+    nativeEvent.stopImmediatePropagation?.();
+  }
 
   private getState(runtime: EcsRuntime): RuntimeState {
     let state = this.states.get(runtime);
@@ -208,8 +221,8 @@ class HudInputRouterImpl {
     canvas.addEventListener("touchcancel", handlers.touchcancel, { passive: true });
 
     if (typeof window !== "undefined") {
-      window.addEventListener("keydown", handlers.keydown);
-      window.addEventListener("keyup", handlers.keyup);
+      window.addEventListener("keydown", handlers.keydown, { capture: true });
+      window.addEventListener("keyup", handlers.keyup, { capture: true });
     }
 
     state.canvasElement = canvas;
@@ -236,8 +249,8 @@ class HudInputRouterImpl {
     canvas.removeEventListener("touchcancel", handlers.touchcancel);
 
     if (typeof window !== "undefined") {
-      window.removeEventListener("keydown", handlers.keydown);
-      window.removeEventListener("keyup", handlers.keyup);
+      window.removeEventListener("keydown", handlers.keydown, true);
+      window.removeEventListener("keyup", handlers.keyup, true);
     }
 
     state.canvasElement = null;
@@ -328,6 +341,7 @@ class HudInputRouterImpl {
       }
 
       if (event.propagationStopped) {
+        this.consumeNativeEvent(options.nativeEvent);
         if (
           type === "pointermove" ||
           type === "pointerdown" ||
@@ -336,10 +350,6 @@ class HudInputRouterImpl {
           type === "wheel"
         ) {
           state.capturedPointerEvents.add(type);
-          if (typeof WheelEvent !== "undefined" && options.nativeEvent instanceof WheelEvent) {
-            options.nativeEvent.preventDefault();
-            options.nativeEvent.stopPropagation();
-          }
         }
         break;
       }
@@ -386,6 +396,7 @@ class HudInputRouterImpl {
       });
       component.handleHudInput(event);
       if (event.propagationStopped) {
+        this.consumeNativeEvent(nativeEvent);
         break;
       }
     }
