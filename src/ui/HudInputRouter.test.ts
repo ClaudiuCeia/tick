@@ -109,9 +109,7 @@ class FakeDomEvent {
   public propagationStopped = false;
   public immediatePropagationStopped = false;
 
-  constructor(
-    readonly init: Record<string, unknown> = {},
-  ) {
+  constructor(readonly init: Record<string, unknown> = {}) {
     Object.assign(this, init);
   }
 
@@ -299,8 +297,13 @@ describe("HudInputRouter", () => {
       nativeEvent: pointerEvent,
     });
 
-    const keyboardEvent = new FakeDomEvent({ key: "Enter", code: "Enter" }) as unknown as KeyboardEvent;
-    const inputComponent = Array.from(runtime.registry.getEntitiesByType(Node))[0]?.getComponent(RecorderInput);
+    const keyboardEvent = new FakeDomEvent({
+      key: "Enter",
+      code: "Enter",
+    }) as unknown as KeyboardEvent;
+    const inputComponent = Array.from(runtime.registry.getEntitiesByType(Node))[0]?.getComponent(
+      RecorderInput,
+    );
     if (!inputComponent) throw new Error("Missing input component");
     inputComponent.stopOn = "keydown";
     HudInputRouter.routeKey(runtime, "keydown", "Enter", "Enter", keyboardEvent);
@@ -382,7 +385,9 @@ describe("HudInputRouter", () => {
 
       expect(input.isDown("Enter")).toBe(false);
 
-      const hudInput = Array.from(runtime.registry.getEntitiesByType(Node))[0]?.getComponent(RecorderInput);
+      const hudInput = Array.from(runtime.registry.getEntitiesByType(Node))[0]?.getComponent(
+        RecorderInput,
+      );
       if (!hudInput) throw new Error("Missing HUD input component");
       hudInput.stopOn = null;
 
