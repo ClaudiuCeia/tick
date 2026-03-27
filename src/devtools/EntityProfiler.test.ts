@@ -41,6 +41,7 @@ describe("EntityProfiler", () => {
     try {
       class A {}
       class B {}
+      EntityProfiler.start();
       (EntityProfiler as any).record(A, "entity", "update", 20);
       (EntityProfiler as any).record(A, "entity", "update", 10);
       (EntityProfiler as any).record(B, "component", "update", 5);
@@ -57,6 +58,7 @@ describe("EntityProfiler", () => {
 
   test("clear removes profile records", () => {
     class A {}
+    EntityProfiler.start();
     (EntityProfiler as any).record(A, "entity", "awake", 1);
 
     EntityProfiler.clear();
@@ -95,14 +97,21 @@ describe("EntityProfiler", () => {
     class ProfiledNode extends Entity {}
 
     EntityProfiler.start();
+
+    const first = new ProfiledNode();
+    first.awake();
+
+    const firstRecord = (EntityProfiler as any).records.get(ProfiledNode);
+    const firstCount = firstRecord.samples.awake.count;
+
     EntityProfiler.stop();
     EntityProfiler.start();
 
-    const e = new ProfiledNode();
-    e.awake();
+    const second = new ProfiledNode();
+    second.awake();
 
     const rec = (EntityProfiler as any).records.get(ProfiledNode);
-    expect(rec.samples.awake.count).toBe(1);
+    expect(rec.samples.awake.count - firstCount).toBe(firstCount);
 
     EntityProfiler.stop();
   });
