@@ -152,7 +152,9 @@ export class EntityProfiler {
     if (this.isHooked) return;
 
     const patch = (proto: object, method: string, kind: ProfileKind, isEntity: boolean) => {
-      const original = (proto as Record<string, unknown>)[method] as (...args: unknown[]) => unknown;
+      const original = (proto as Record<string, unknown>)[method] as (
+        ...args: unknown[]
+      ) => unknown;
       (proto as Record<string, unknown>)[method] = function (this: unknown, ...args: unknown[]) {
         const start = performance.now();
         const result = original.apply(this, args);
