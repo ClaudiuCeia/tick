@@ -1,12 +1,12 @@
-import { Entity } from "../ecs/Entity.ts";
-import { Component } from "../ecs/Component.ts";
-import { RenderComponent } from "../render/RenderComponent.ts";
 import { CollisionEntity } from "../collision/CollisionEntity.ts";
+import { Component } from "../ecs/Component.ts";
+import { EcsRuntime } from "../ecs/EcsRuntime.ts";
+import { Entity } from "../ecs/Entity.ts";
 import { Vector2D } from "../math/Vector2D.ts";
 import type { ICamera } from "../render/ICamera.ts";
-import { EcsRuntime } from "../ecs/EcsRuntime.ts";
+import { RenderComponent } from "../render/RenderComponent.ts";
 
-type ProfileKind = "awake" | "update" | "render" | "destroy";
+export type ProfileKind = "awake" | "update" | "render" | "destroy";
 type ProfileData = { count: number; totalTime: number };
 type ProfileRecord = {
   name: string;
@@ -15,18 +15,22 @@ type ProfileRecord = {
   entityRef?: Entity;
 };
 
-/**
- * Runtime performance profiler for the ECS.
- *
- * Patches Entity, Component, and RenderComponent prototypes to time every
- * awake/update/render/destroy call. Reports per-class averages.
- *
- * Usage:
- *   EntityProfiler.start()   // begin recording
- *   EntityProfiler.stop()    // stop recording
- *   EntityProfiler.printTopSlow('update', 10)  // print slowest
- *   EntityProfiler.scanOffscreenCollision(camera)  // audit culling
- */
+export type EntityProfilerChildSummary = {
+  name: string;
+  avg: number;
+};
+
+export type EntityProfilerEntry = {
+  name: string;
+  kind: "entity" | "component" | "renderComponent";
+  avg: number;
+  totalTime: number;
+  count: number;
+  children: EntityProfilerChildSummary[];
+};
+
+export type EntityProfilerReport = Record<ProfileKind, EntityProfilerEntry[]>;
+
 export class EntityProfiler {
   private static isRunning = false;
   private static isHooked = false;
@@ -48,50 +52,62 @@ export class EntityProfiler {
     this.records.clear();
   }
 
-  public static printTopSlow(kind: ProfileKind, topN = 10): void {
-    const list = Array.from(this.records.values())
-      .filter((r) => r.samples[kind] && r.samples[kind].count > 0)
-      .map((r) => ({
-        name: r.name,
-        kind: r.kind,
-        avg: r.samples[kind].totalTime / r.samples[kind].count,
-        ref: r.entityRef,
+  public static isActive(): boolean {
+    return this.isRunning;
+  }
+
+  public static hasSamples(kind?: ProfileKind): boolean {
+    if (!kind) {
+      return Array.from(this.records.values()).some((record) =>
+        Object.values(record.samples).some((sample) => sample.count > 0),
+      );
+    }
+
+    return Array.from(this.records.values()).some((record) => record.samples[kind].count > 0);
+  }
+
+  public static getTopSlow(kind: ProfileKind, topN = 10): EntityProfilerEntry[] {
+    return Array.from(this.records.values())
+      .filter((record) => record.samples[kind].count > 0)
+      .map((record) => ({
+        name: record.name,
+        kind: record.kind,
+        avg: record.samples[kind].totalTime / record.samples[kind].count,
+        totalTime: record.samples[kind].totalTime,
+        count: record.samples[kind].count,
+        children: record.entityRef ? this.getTopChildren(record.entityRef, kind) : [],
       }))
       .sort((a, b) => b.avg - a.avg)
       .slice(0, topN);
-
-    console.group(`%c[Profiler] Top ${topN} slowest by ${kind}`, "color: gold");
-    for (const r of list) {
-      console.log(
-        `%c${r.kind.toUpperCase()}: ${r.name} | ${r.avg.toFixed(3)} ms avg`,
-        "color: cyan",
-      );
-      if (r.ref) this.printTopChildren(r.ref, kind);
-    }
-    console.groupEnd();
   }
 
-  private static printTopChildren(entity: Entity, kind: ProfileKind): void {
-    const childRecords = entity.children
-      .map((child) => ({
-        name: child.constructor.name,
-        record: this.records.get(child.constructor),
-      }))
-      .filter((c) => c.record?.samples[kind])
-      .map((c) => ({
-        name: c.name,
-        avg: c.record!.samples[kind].totalTime / c.record!.samples[kind].count,
-      }))
-      .sort((a, b) => b.avg - a.avg)
-      .slice(0, 5);
+  public static getReport(topN = 10): EntityProfilerReport {
+    return {
+      awake: this.getTopSlow("awake", topN),
+      update: this.getTopSlow("update", topN),
+      render: this.getTopSlow("render", topN),
+      destroy: this.getTopSlow("destroy", topN),
+    };
+  }
 
-    if (childRecords.length) {
-      console.group("  %cChildren:", "color: violet");
-      for (const child of childRecords) {
-        console.log(`  ${child.name}: ${child.avg.toFixed(3)}ms avg`);
+  public static printTopSlow(kind: ProfileKind, topN = 10): void {
+    const list = this.getTopSlow(kind, topN);
+
+    console.group(`%c[Profiler] Top ${topN} slowest by ${kind}`, "color: gold");
+    for (const entry of list) {
+      console.log(
+        `%c${entry.kind.toUpperCase()}: ${entry.name} | ${entry.avg.toFixed(3)} ms avg | ${entry.count} samples`,
+        "color: cyan",
+      );
+      if (entry.children.length > 0) {
+        console.group("  %cChildren:", "color: violet");
+        for (const child of entry.children) {
+          console.log(`  ${child.name}: ${child.avg.toFixed(3)}ms avg`);
+        }
+        console.groupEnd();
       }
-      console.groupEnd();
     }
+    console.groupEnd();
   }
 
   public static scanOffscreenCollision(camera: ICamera): void {
@@ -99,10 +115,10 @@ export class EntityProfiler {
     const canvasSize = Vector2D.fromScreen();
     for (const entity of EcsRuntime.getCurrent().registry.getAllEntities()) {
       const colliders = entity.children.filter(
-        (c) => c instanceof CollisionEntity,
+        (child) => child instanceof CollisionEntity,
       ) as CollisionEntity[];
-      for (const col of colliders) {
-        const bbox = col.bbox();
+      for (const collider of colliders) {
+        const bbox = collider.bbox();
         const screenPos = camera.toCanvas(new Vector2D(bbox.x, bbox.y), canvasSize);
         if (
           screenPos.x + bbox.width < 0 ||
@@ -117,14 +133,29 @@ export class EntityProfiler {
     console.groupEnd();
   }
 
+  private static getTopChildren(entity: Entity, kind: ProfileKind): EntityProfilerChildSummary[] {
+    return entity.children
+      .map((child) => ({
+        name: child.constructor.name,
+        record: this.records.get(child.constructor),
+      }))
+      .filter((child) => (child.record?.samples[kind].count ?? 0) > 0)
+      .map((child) => ({
+        name: child.name,
+        avg: child.record!.samples[kind].totalTime / child.record!.samples[kind].count,
+      }))
+      .sort((a, b) => b.avg - a.avg)
+      .slice(0, 5);
+  }
+
   private static hook(): void {
     if (this.isHooked) return;
 
     const patch = (proto: object, method: string, kind: ProfileKind, isEntity: boolean) => {
-      const orig = (proto as Record<string, unknown>)[method] as (...args: unknown[]) => unknown;
+      const original = (proto as Record<string, unknown>)[method] as (...args: unknown[]) => unknown;
       (proto as Record<string, unknown>)[method] = function (this: unknown, ...args: unknown[]) {
         const start = performance.now();
-        const result = orig.apply(this, args);
+        const result = original.apply(this, args);
         EntityProfiler.record(
           (this as { constructor: unknown }).constructor,
           isEntity ? "entity" : "component",
@@ -158,9 +189,13 @@ export class EntityProfiler {
     deltaMs: number,
     instance?: Entity,
   ): void {
-    let rec = this.records.get(ctor);
-    if (!rec) {
-      rec = {
+    if (!this.isRunning) {
+      return;
+    }
+
+    let record = this.records.get(ctor);
+    if (!record) {
+      record = {
         name: (ctor as { name: string }).name,
         kind,
         samples: {
@@ -171,10 +206,11 @@ export class EntityProfiler {
         },
         entityRef: instance,
       };
-      this.records.set(ctor, rec);
+      this.records.set(ctor, record);
     }
-    const s = rec.samples[method];
-    s.count++;
-    s.totalTime += deltaMs;
+
+    const sample = record.samples[method];
+    sample.count += 1;
+    sample.totalTime += deltaMs;
   }
 }
