@@ -12,6 +12,11 @@ export {
 } from "./HudLayoutDebugRenderComponent.ts";
 export { HudInputComponent, type HudKeyboardMode } from "./HudInputComponent.ts";
 export {
+  HudScrollAreaComponent,
+  type HudScrollAreaMetrics,
+  type HudScrollAreaOptions,
+} from "./HudScrollAreaComponent.ts";
+export {
   HudInputEvent,
   type HudInputEventInit,
   type HudInputEventType,
