@@ -5,6 +5,8 @@ type AssetKind = "image" | "audio" | "font" | "spritesheet";
 type AssetHandle = {
   kind: AssetKind;
   cacheKey: string;
+  entryId: number;
+  acquisitionId: number;
 };
 
 type LoaderResult<T> = {
@@ -13,13 +15,15 @@ type LoaderResult<T> = {
 };
 
 type CacheEntry<T = unknown> = {
+  id: number;
   kind: AssetKind;
   cacheKey: string;
   refs: number;
   promise: Promise<T> | null;
   value: T | null;
   dispose: (() => void) | null;
-  dependencies: string[];
+  dependencies: CacheEntry[];
+  collected: boolean;
 };
 
 type AudioPlayRequest = {
@@ -216,9 +220,25 @@ const defaultImageLoader: AssetLoaders["image"] = async (url) => {
   image.decoding = "async";
 
   await new Promise<void>((resolve, reject) => {
-    image.onload = () => resolve();
-    image.onerror = () => reject(new Error(`Failed to load image: ${url}`));
-    image.src = url;
+    const cleanup = () => {
+      image.onload = null;
+      image.onerror = null;
+    };
+    image.onload = () => {
+      cleanup();
+      resolve();
+    };
+    image.onerror = () => {
+      cleanup();
+      reject(new Error(`Failed to load image: ${url}`));
+    };
+
+    try {
+      image.src = url;
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 
   return { asset: image };
@@ -242,10 +262,15 @@ const defaultAudioLoader: AssetLoaders["audio"] = async (url) => {
       audio.removeEventListener("error", onError);
     };
 
-    audio.addEventListener("canplaythrough", onReady, { once: true });
-    audio.addEventListener("error", onError, { once: true });
-    audio.src = url;
-    audio.load();
+    try {
+      audio.addEventListener("canplaythrough", onReady, { once: true });
+      audio.addEventListener("error", onError, { once: true });
+      audio.src = url;
+      audio.load();
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 
   return { asset: audio };
@@ -334,8 +359,6 @@ const DEFAULT_LOADERS: AssetLoaders = {
 };
 
 export class AssetScope {
-  private readonly aliases = new Map<string, AssetHandle>();
-
   constructor(
     private readonly manager: AssetManager,
     public readonly id: string,
@@ -344,13 +367,11 @@ export class AssetScope {
 
   public async loadImage(alias: string, url: string): Promise<HTMLImageElement> {
     const handle = await this.manager.acquireImage(this.id, alias, url);
-    this.aliases.set(alias, handle);
     return this.manager.getByHandle(handle) as HTMLImageElement;
   }
 
   public async loadAudio(alias: string, url: string): Promise<HTMLAudioElement> {
     const handle = await this.manager.acquireAudio(this.id, alias, url);
-    this.aliases.set(alias, handle);
     return this.manager.getByHandle(handle) as HTMLAudioElement;
   }
 
@@ -361,7 +382,6 @@ export class AssetScope {
     descriptors?: FontFaceDescriptors,
   ): Promise<FontFace> {
     const handle = await this.manager.acquireFont(this.id, alias, family, source, descriptors);
-    this.aliases.set(alias, handle);
     return this.manager.getByHandle(handle) as FontFace;
   }
 
@@ -370,7 +390,7 @@ export class AssetScope {
     imageAlias: string,
     options: SpriteSheetGridOptions,
   ): Promise<SpriteSheetAsset> {
-    const imageHandle = this.aliases.get(imageAlias);
+    const imageHandle = this.manager.getAliasHandle(this.id, imageAlias);
     if (!imageHandle || imageHandle.kind !== "image") {
       throw new Error(
         `Sprite sheet image alias '${imageAlias}' not found in scope '${this.label}'`,
@@ -378,12 +398,11 @@ export class AssetScope {
     }
 
     const handle = await this.manager.acquireSpriteSheet(this.id, alias, imageHandle, options);
-    this.aliases.set(alias, handle);
     return this.manager.getByHandle(handle) as SpriteSheetAsset;
   }
 
   public has(alias: string): boolean {
-    return this.aliases.has(alias);
+    return this.manager.getAliasHandle(this.id, alias) !== null;
   }
 
   public getImage(alias: string): HTMLImageElement {
@@ -404,16 +423,14 @@ export class AssetScope {
 
   public releaseAlias(alias: string): void {
     this.manager.releaseAlias(this.id, alias);
-    this.aliases.delete(alias);
   }
 
   public release(): void {
     this.manager.releaseScope(this.id);
-    this.aliases.clear();
   }
 
   private get(alias: string, expectedKind: AssetKind): unknown {
-    const handle = this.aliases.get(alias);
+    const handle = this.manager.getAliasHandle(this.id, alias);
     if (!handle) {
       throw new Error(`Asset alias '${alias}' is not loaded in scope '${this.label}'`);
     }
@@ -429,9 +446,15 @@ export class AssetManager {
   private readonly entries = new Map<string, CacheEntry>();
   private readonly scopeAliases = new Map<string, Map<string, AssetHandle>>();
   private scopeCounter = 0;
+  private cacheEntryCounter = 0;
+  private acquisitionCounter = 0;
   private audioUnlocked = false;
   private audioUnlockTarget: EventTarget | null = null;
   private audioUnlockCleanup: (() => void) | null = null;
+  private audioUnlockGeneration = 0;
+  private audioUnlockAttemptCounter = 0;
+  private readonly audioUnlockAttempts = new Set<number>();
+  private audioPreferredUnlockTarget: EventTarget | null = null;
   private readonly pendingAudioPlays: AudioPlayRequest[] = [];
 
   constructor(options: AssetManagerOptions = {}) {
@@ -546,19 +569,40 @@ export class AssetManager {
     const aliases = this.scopeAliases.get(scopeId);
     if (!aliases) return;
 
+    const errors: unknown[] = [];
     for (const alias of Array.from(aliases.keys())) {
-      this.releaseAlias(scopeId, alias);
+      try {
+        this.releaseAlias(scopeId, alias);
+      } catch (error) {
+        errors.push(error);
+      }
     }
 
     this.scopeAliases.delete(scopeId);
+    this.throwDisposalErrors(errors);
   }
 
   public clear(): void {
+    const errors: unknown[] = [];
     for (const scopeId of Array.from(this.scopeAliases.keys())) {
-      this.releaseScope(scopeId);
+      try {
+        this.releaseScope(scopeId);
+      } catch (error) {
+        errors.push(error);
+      }
     }
+
+    const retiredEntries = Array.from(this.entries.values());
     this.entries.clear();
+    for (const entry of retiredEntries) {
+      try {
+        this.maybeCollect(entry);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
     this.resetAudioUnlock();
+    this.throwDisposalErrors(errors);
   }
 
   public playAudio(
@@ -566,23 +610,35 @@ export class AssetManager {
     options: { volume?: number; unlockTarget?: EventTarget | null } = {},
   ): void {
     if (!audio) return;
-    const volume = options.volume ?? 1;
+    const volume = this.normalizeVolume(options.volume);
+    const unlockTarget =
+      options.unlockTarget === undefined ? this.getDefaultUnlockTarget() : options.unlockTarget;
+    const generation = this.audioUnlockGeneration;
 
     if (this.audioUnlocked) {
-      this.playAudioNow(audio, volume);
+      void this.playAudioNow(audio, volume).then((played) => {
+        if (played || generation !== this.audioUnlockGeneration) return;
+        this.audioUnlocked = false;
+        if (unlockTarget) {
+          this.pendingAudioPlays.push({ audio, volume });
+          this.audioPreferredUnlockTarget = unlockTarget;
+          this.installAudioUnlock(unlockTarget);
+        }
+      });
       return;
     }
 
-    const unlockTarget =
-      options.unlockTarget === undefined ? this.getDefaultUnlockTarget() : options.unlockTarget;
     if (!unlockTarget) {
       // Non-browser environment or unavailable unlock target: best-effort immediate play.
-      this.audioUnlocked = true;
-      this.playAudioNow(audio, volume);
+      void this.playAudioNow(audio, volume).then((played) => {
+        if (!played || generation !== this.audioUnlockGeneration) return;
+        this.drainPendingAudio();
+      });
       return;
     }
 
     this.pendingAudioPlays.push({ audio, volume });
+    this.audioPreferredUnlockTarget = unlockTarget;
     this.installAudioUnlock(unlockTarget);
   }
 
@@ -602,23 +658,27 @@ export class AssetManager {
   }
 
   public getByHandle(handle: AssetHandle): unknown {
-    const entry = this.entries.get(handle.cacheKey);
-    if (!entry || !entry.value) {
+    const entry = this.getEntryByHandle(handle);
+    if (!entry?.value) {
       throw new Error(`Asset '${handle.cacheKey}' is not loaded`);
     }
     return entry.value;
   }
 
+  public getAliasHandle(scopeId: string, alias: string): AssetHandle | null {
+    const handle = this.scopeAliases.get(scopeId)?.get(alias);
+    if (!handle || !this.getEntryByHandle(handle)?.value) return null;
+    return handle;
+  }
+
   public async acquireImage(scopeId: string, alias: string, url: string): Promise<AssetHandle> {
     const cacheKey = `image:${url}`;
-    await this.acquire(scopeId, alias, "image", cacheKey, async () => this.loaders.image(url), []);
-    return { kind: "image", cacheKey };
+    return this.acquire(scopeId, alias, "image", cacheKey, async () => this.loaders.image(url), []);
   }
 
   public async acquireAudio(scopeId: string, alias: string, url: string): Promise<AssetHandle> {
     const cacheKey = `audio:${url}`;
-    await this.acquire(scopeId, alias, "audio", cacheKey, async () => this.loaders.audio(url), []);
-    return { kind: "audio", cacheKey };
+    return this.acquire(scopeId, alias, "audio", cacheKey, async () => this.loaders.audio(url), []);
   }
 
   public async acquireFont(
@@ -629,7 +689,7 @@ export class AssetManager {
     descriptors?: FontFaceDescriptors,
   ): Promise<AssetHandle> {
     const cacheKey = `font:${family}:${source}:${stableStringify(descriptors ?? {})}`;
-    await this.acquire(
+    return this.acquire(
       scopeId,
       alias,
       "font",
@@ -637,7 +697,6 @@ export class AssetManager {
       async () => this.loaders.font(family, source, descriptors),
       [],
     );
-    return { kind: "font", cacheKey };
   }
 
   public async acquireSpriteSheet(
@@ -650,29 +709,20 @@ export class AssetManager {
       throw new Error("Sprite sheets can only be created from image assets");
     }
 
-    const imageEntry = this.entries.get(imageHandle.cacheKey);
-    if (!imageEntry || !imageEntry.value) {
+    const imageEntry = this.getEntryByHandle(imageHandle);
+    if (!imageEntry?.value) {
       throw new Error(`Image asset '${imageHandle.cacheKey}' must be loaded before spritesheet`);
     }
 
-    this.incrementRef(imageHandle.cacheKey);
     const cacheKey = `spritesheet:${imageHandle.cacheKey}:${stableStringify(options)}`;
-
-    try {
-      await this.acquire(
-        scopeId,
-        alias,
-        "spritesheet",
-        cacheKey,
-        async () => this.loaders.spritesheet(imageEntry.value as HTMLImageElement, options),
-        [imageHandle.cacheKey],
-      );
-    } catch (error) {
-      this.decrementRef(imageHandle.cacheKey);
-      throw error;
-    }
-
-    return { kind: "spritesheet", cacheKey };
+    return this.acquire(
+      scopeId,
+      alias,
+      "spritesheet",
+      cacheKey,
+      async () => this.loaders.spritesheet(imageEntry.value as HTMLImageElement, options),
+      [imageEntry],
+    );
   }
 
   public releaseAlias(scopeId: string, alias: string): void {
@@ -683,7 +733,10 @@ export class AssetManager {
     if (!handle) return;
 
     scopeAliases.delete(alias);
-    this.decrementRef(handle.cacheKey);
+    const entry = this.getEntryByHandle(handle);
+    if (entry) {
+      this.decrementRef(entry);
+    }
   }
 
   private getScopeAliases(scopeId: string): Map<string, AssetHandle> {
@@ -694,35 +747,50 @@ export class AssetManager {
     return scopeAliases;
   }
 
+  private getEntryByHandle(handle: AssetHandle): CacheEntry | null {
+    const entry = this.entries.get(handle.cacheKey);
+    return entry?.id === handle.entryId ? entry : null;
+  }
+
   private async acquire(
     scopeId: string,
     alias: string,
     kind: AssetKind,
     cacheKey: string,
     loader: () => Promise<LoaderResult<any>>,
-    dependencies: string[],
-  ): Promise<void> {
+    dependencies: CacheEntry[],
+  ): Promise<AssetHandle> {
     const scopeAliases = this.getScopeAliases(scopeId);
     if (scopeAliases.has(alias)) {
       throw new Error(`Asset alias '${alias}' already exists in this scope`);
     }
-
     let entry = this.entries.get(cacheKey);
     if (entry) {
-      this.incrementRef(cacheKey);
-      scopeAliases.set(alias, { kind, cacheKey });
+      const handle = {
+        kind,
+        cacheKey,
+        entryId: entry.id,
+        acquisitionId: ++this.acquisitionCounter,
+      };
+      this.incrementRef(entry);
+      scopeAliases.set(alias, handle);
 
       try {
         await entry.promise;
+        this.assertAcquisitionActive(scopeId, scopeAliases, alias, handle);
       } catch (error) {
-        scopeAliases.delete(alias);
-        this.decrementRef(cacheKey);
+        this.rollbackAlias(scopeAliases, alias, handle, entry);
         throw error;
       }
-      return;
+      return handle;
+    }
+
+    for (const dependency of dependencies) {
+      this.incrementRef(dependency);
     }
 
     entry = {
+      id: ++this.cacheEntryCounter,
       kind,
       cacheKey,
       refs: 1,
@@ -730,9 +798,16 @@ export class AssetManager {
       value: null,
       dispose: null,
       dependencies,
+      collected: false,
+    };
+    const handle = {
+      kind,
+      cacheKey,
+      entryId: entry.id,
+      acquisitionId: ++this.acquisitionCounter,
     };
     this.entries.set(cacheKey, entry);
-    scopeAliases.set(alias, { kind, cacheKey });
+    scopeAliases.set(alias, handle);
 
     const loadPromise = (async () => {
       const loaded = await loader();
@@ -745,45 +820,80 @@ export class AssetManager {
 
     try {
       await loadPromise;
+      this.assertAcquisitionActive(scopeId, scopeAliases, alias, handle);
     } catch (error) {
-      scopeAliases.delete(alias);
-      this.decrementRef(cacheKey);
+      this.rollbackAlias(scopeAliases, alias, handle, entry);
       throw error;
     } finally {
       entry.promise = null;
-      this.maybeCollect(cacheKey);
+      this.maybeCollect(entry);
+    }
+    return handle;
+  }
+
+  private assertAcquisitionActive(
+    scopeId: string,
+    scopeAliases: Map<string, AssetHandle>,
+    alias: string,
+    handle: AssetHandle,
+  ): void {
+    const activeHandle = scopeAliases.get(alias);
+    if (
+      this.scopeAliases.get(scopeId) !== scopeAliases ||
+      activeHandle?.acquisitionId !== handle.acquisitionId
+    ) {
+      throw new Error(`Asset scope '${scopeId}' is no longer active`);
     }
   }
 
-  private incrementRef(cacheKey: string): void {
-    const entry = this.entries.get(cacheKey);
-    if (!entry) return;
+  private rollbackAlias(
+    scopeAliases: Map<string, AssetHandle>,
+    alias: string,
+    handle: AssetHandle,
+    entry: CacheEntry,
+  ): void {
+    if (scopeAliases.get(alias)?.acquisitionId !== handle.acquisitionId) return;
+    scopeAliases.delete(alias);
+    this.decrementRef(entry);
+  }
+
+  private incrementRef(entry: CacheEntry): void {
+    if (entry.collected) {
+      throw new Error(`Asset '${entry.cacheKey}' has already been disposed`);
+    }
     entry.refs++;
   }
 
-  private decrementRef(cacheKey: string): void {
-    const entry = this.entries.get(cacheKey);
-    if (!entry) return;
-
+  private decrementRef(entry: CacheEntry): void {
+    if (entry.collected) return;
     entry.refs = Math.max(0, entry.refs - 1);
-    this.maybeCollect(cacheKey);
+    this.maybeCollect(entry);
   }
 
-  private maybeCollect(cacheKey: string): void {
-    const entry = this.entries.get(cacheKey);
-    if (!entry) return;
-
+  private maybeCollect(entry: CacheEntry): void {
+    if (entry.collected) return;
     if (entry.refs > 0) return;
     if (entry.promise) return;
 
-    if (entry.dispose) {
-      entry.dispose();
+    entry.collected = true;
+    if (this.entries.get(entry.cacheKey) === entry) {
+      this.entries.delete(entry.cacheKey);
     }
 
-    this.entries.delete(cacheKey);
-    for (const dependencyKey of entry.dependencies) {
-      this.decrementRef(dependencyKey);
+    const errors: unknown[] = [];
+    try {
+      entry.dispose?.();
+    } catch (error) {
+      errors.push(error);
     }
+    for (const dependency of entry.dependencies) {
+      try {
+        this.decrementRef(dependency);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    this.throwDisposalErrors(errors);
   }
 
   private installAudioUnlock(target: EventTarget): void {
@@ -793,37 +903,45 @@ export class AssetManager {
     this.clearAudioUnlockListeners();
     this.audioUnlockTarget = target;
 
+    const generation = this.audioUnlockGeneration;
     const unlock = () => {
-      if (this.audioUnlocked) return;
-      this.audioUnlocked = true;
-      this.primeLoadedAudio();
-      const queue = this.pendingAudioPlays.splice(0);
-      for (const request of queue) {
-        this.playAudioNow(request.audio, request.volume);
+      if (generation !== this.audioUnlockGeneration || this.audioUnlockCleanup !== cleanup) {
+        cleanup();
+        return;
       }
       cleanup();
+      if (this.audioUnlocked) return;
+      this.primeLoadedAudio();
+      this.drainPendingAudio();
     };
 
     const cleanup = () => {
-      if (!this.audioUnlockTarget) return;
-      this.audioUnlockTarget.removeEventListener("pointerdown", unlock as EventListener);
-      this.audioUnlockTarget.removeEventListener("keydown", unlock as EventListener);
-      this.audioUnlockTarget.removeEventListener("touchstart", unlock as EventListener);
+      target.removeEventListener("pointerdown", unlock as EventListener);
+      target.removeEventListener("keydown", unlock as EventListener);
+      target.removeEventListener("touchstart", unlock as EventListener);
       if (this.audioUnlockCleanup === cleanup) {
         this.audioUnlockCleanup = null;
+        this.audioUnlockTarget = null;
       }
-      this.audioUnlockTarget = null;
     };
 
-    target.addEventListener("pointerdown", unlock as EventListener, { once: true });
-    target.addEventListener("keydown", unlock as EventListener, { once: true });
-    target.addEventListener("touchstart", unlock as EventListener, { once: true });
     this.audioUnlockCleanup = cleanup;
+    try {
+      target.addEventListener("pointerdown", unlock as EventListener, { once: true });
+      target.addEventListener("keydown", unlock as EventListener, { once: true });
+      target.addEventListener("touchstart", unlock as EventListener, { once: true });
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
   }
 
   private resetAudioUnlock(): void {
+    this.audioUnlockGeneration++;
     this.clearAudioUnlockListeners();
     this.audioUnlocked = false;
+    this.audioUnlockAttempts.clear();
+    this.audioPreferredUnlockTarget = null;
     this.pendingAudioPlays.length = 0;
   }
 
@@ -838,31 +956,91 @@ export class AssetManager {
     return null;
   }
 
-  private playAudioNow(audio: HTMLAudioElement, volume: number): void {
-    const instance = audio.cloneNode(true) as HTMLAudioElement;
-    instance.volume = volume;
-    instance.currentTime = 0;
-    void instance.play().catch(() => {
-      // Ignore browser autoplay rejections: unlock flow retries on next gesture.
+  private normalizeVolume(volume: number | undefined): number {
+    if (volume === undefined || Number.isNaN(volume)) return 1;
+    return Math.min(1, Math.max(0, volume));
+  }
+
+  private async playAudioNow(audio: HTMLAudioElement, volume: number): Promise<boolean> {
+    try {
+      const instance = audio.cloneNode(true) as HTMLAudioElement;
+      instance.volume = volume;
+      instance.currentTime = 0;
+      await instance.play();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private drainPendingAudio(): void {
+    const queue = this.pendingAudioPlays.splice(0);
+    if (queue.length === 0) {
+      this.reconcileAudioUnlock();
+      return;
+    }
+
+    this.audioUnlocked = false;
+    this.clearAudioUnlockListeners();
+    const generation = this.audioUnlockGeneration;
+    const attemptId = ++this.audioUnlockAttemptCounter;
+    this.audioUnlockAttempts.add(attemptId);
+
+    void Promise.all(
+      queue.map(async (request) => ({
+        request,
+        played: await this.playAudioNow(request.audio, request.volume),
+      })),
+    ).then((results) => {
+      if (generation !== this.audioUnlockGeneration) return;
+
+      this.audioUnlockAttempts.delete(attemptId);
+      const failed = results.filter((result) => !result.played).map((result) => result.request);
+      this.pendingAudioPlays.unshift(...failed);
+      this.reconcileAudioUnlock();
     });
+  }
+
+  private reconcileAudioUnlock(): void {
+    if (this.audioUnlockAttempts.size > 0) return;
+    if (this.pendingAudioPlays.length === 0) {
+      this.audioUnlocked = true;
+      this.clearAudioUnlockListeners();
+      return;
+    }
+
+    this.audioUnlocked = false;
+    if (this.audioUnlockCleanup || !this.audioPreferredUnlockTarget) return;
+    this.installAudioUnlock(this.audioPreferredUnlockTarget);
+  }
+
+  private throwDisposalErrors(errors: unknown[]): void {
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "One or more asset disposers failed");
+    }
   }
 
   private primeLoadedAudio(): void {
     for (const entry of this.entries.values()) {
       if (entry.kind !== "audio" || !isAudioLike(entry.value)) continue;
-      const probe = entry.value.cloneNode(true) as HTMLAudioElement;
-      probe.muted = true;
-      probe.volume = 0;
-      probe.currentTime = 0;
-      void probe
-        .play()
-        .then(() => {
-          probe.pause?.();
-          probe.currentTime = 0;
-        })
-        .catch(() => {
-          // Best-effort warmup; ignore if browser still blocks.
-        });
+      try {
+        const probe = entry.value.cloneNode(true) as HTMLAudioElement;
+        probe.muted = true;
+        probe.volume = 0;
+        probe.currentTime = 0;
+        void probe
+          .play()
+          .then(() => {
+            probe.pause?.();
+            probe.currentTime = 0;
+          })
+          .catch(() => {
+            // Best-effort warmup; ignore if browser still blocks.
+          });
+      } catch {
+        // Best-effort warmup; continue priming other clips.
+      }
     }
   }
 }
