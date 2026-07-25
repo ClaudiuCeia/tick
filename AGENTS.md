@@ -43,6 +43,7 @@ Each module has an `index.ts` barrel. `src/index.ts` re-exports all barrels. `in
 - **Lifecycle**: `constructor` (registered, not awake) → `awake()` → `update(dt)` → `destroy()`.
 - Propagates all lifecycle calls to components and children.
 - **Lazy awake**: `addComponent()` / `addChild()` on an already-awake entity immediately calls `awake()` on the new addition.
+- `removeChild()` destroys an awake child after detaching it. To move a live child, call `newParent.addChild(child)`; automatic reparenting detaches from the previous parent without destruction and preserves awake state.
 - Component lookup is O(1) via `_componentMap: Map<Function, Component>`.
 - Child lookup by type is O(1) via `_childMap: Map<Function, Entity[]>`.
 - `removeChild(() => true)` correctly removes all children (the predicate form).
@@ -58,8 +59,8 @@ Each module has an `index.ts` barrel. `src/index.ts` re-exports all barrels. `in
 
 - Per-runtime registry (`EcsRuntime.registry`). Do **not** register manually — Entity constructor handles it.
 - Backed by `Map<string, Entity>` (by id) + `Map<Function, Set<Entity>>` (by type). Both O(1).
-- `clear()` wipes **both** maps. Safe to call on scene transitions.
-- `getCreationSite(id)` returns the call stack line from when an entity was registered — useful for debugging orphan leaks.
+- `clear()` wipes all registry indexes but does **not** destroy entities or components. Use `EcsRuntime.dispose()` for teardown; clearing alone can leak lifecycle-owned subscriptions and render registrations.
+- Creation-site tracing is opt-in with `new EntityRegistry({ captureCreationSites: true })`; it is disabled by default. When enabled, `getCreationSite(id)` returns the captured registration call site.
 - Common queries:
   ```ts
   const runtime = EcsRuntime.getCurrent();
@@ -68,9 +69,16 @@ Each module has an `index.ts` barrel. `src/index.ts` re-exports all barrels. `in
   runtime.registry.findEntities((e) => e.hasComponent(TimeComponent));
   ```
 
+#### EcsRuntime persistence (`src/ecs/EcsRuntime.ts`)
+
+- `runtime.snapshot(root, options)` snapshots exactly the root subtree. `options.sid(entity)` assigns stable instance SIDs, while `options.params(entity)` supplies per-instance factory parameters; class `static type` values identify classes, not instances.
+- Undefined callback results use normal SID fallback or params retained from a previously loaded node.
+- `loadSnapshot()` stages factories in a quarantined runtime. Factories must remain side-effect-free with respect to captured external objects and must not awaken entities or create entities outside the snapshot graph.
+- A successful load destroys the target runtime's entire old entity graph, adopts the staged graph, commits state, and leaves the loaded root asleep. Validation or staging failure preserves the old graph.
+
 #### GarbageCollector (`src/ecs/GarbageCollector.ts`)
 
-- Singleton-style utility: `GarbageCollector.get(root?, registry?)`.
+- `GarbageCollector.get(root?, registry?)` creates a new independent collector on every call; collectors do not share root or registry configuration. An explicit registry pins the collector to it, while an omitted registry resolves the current runtime's registry when the collector is used.
 - `findOrphans()` walks the live entity tree from the root entity (default name `"Game"`) and returns any registered entity not reachable from it.
 - `collect()` destroys all orphans and returns the count.
 - Call after operations that create transient objects (e.g., throwaway orbital computations).
@@ -186,7 +194,7 @@ All take `x ∈ [0, 1]`, return `0` outside that range:
 
 #### CollisionShape interface (`src/collision/CollisionShape.ts`)
 
-Four methods all shapes must implement:
+Five methods all shapes must implement:
 
 - `getAABB(transform, anchor)` — returns `{x, y, width, height}` in world space.
 - `isCollidingWith(other, tA, anchorA, tB, anchorB)` — boolean.
@@ -198,13 +206,14 @@ Four methods all shapes must implement:
 
 #### Shapes
 
-| Shape                     | File                  | Notes                                                                                |
-| ------------------------- | --------------------- | ------------------------------------------------------------------------------------ |
-| `CircleCollisionShape`    | `shapes/Circle...`    | `getCollisionNormal` throws — not implemented                                        |
-| `RectangleCollisionShape` | `shapes/Rectangle...` | Full MTV via AABB overlap                                                            |
-| `CurveCollisionShape`     | `shapes/Curve...`     | Height function `getYAt(x)`. No rotation/scale support. Only collides with Rectangle |
+| Shape                     | File                  | Notes                                                                               |
+| ------------------------- | --------------------- | ----------------------------------------------------------------------------------- |
+| `CircleCollisionShape`    | `shapes/Circle...`    | Circle/circle and circle/rectangle collision + MTV; delegates curve/custom pairs    |
+| `RectangleCollisionShape` | `shapes/Rectangle...` | Collision + MTV via AABB overlap, including AABB approximation for rotated boxes    |
+| `CurveCollisionShape`     | `shapes/Curve...`     | Finite depth; no rotation/scale; sampled vertical collision with rectangles/circles |
 
 Unknown shape combinations use double-dispatch: delegate to `other.isCollidingWith(this, ...)`.
+Curve `boundsSamples` provide only an approximate AABB unless guaranteed `surfaceBounds` are supplied. Set `requireSurfaceBounds` to enforce conservative broadphase bounds. Narrowphase evaluates actual, unclamped heights at `collisionSamples + 1` points and throws if explicit bounds are violated.
 
 #### CollisionEntity (`src/collision/CollisionEntity.ts`)
 
@@ -237,7 +246,7 @@ In game `doRender` implementations, cast as needed: `const cam = camera as Camer
 #### RenderComponent (`src/render/RenderComponent.ts`)
 
 - Abstract. Override `doRender(ctx, camera: ICamera, canvasSize)`.
-- `render()` is the final template method — calls `doRender`.
+- `render()` is the final template method — it wraps each `doRender` call in `ctx.save()` / `ctx.restore()` with `finally`, isolating canvas state even when rendering throws.
 - `awake()` / `destroy()` self-register/unregister with `RenderSystem`.
 - `isVisible(camera)`:
   - Returns `false` if entity is not awake.
@@ -252,11 +261,11 @@ In game `doRender` implementations, cast as needed: `const cam = camera as Camer
 
 #### RenderSystem (`src/render/RenderSystem.ts`)
 
-- Instantiated with `new RenderSystem(canvas: ICanvas, camera: ICamera)`.
+- Instantiated with `new RenderSystem(canvas: ICanvas, camera: ICamera, runtime?, hudViewport?)`.
 - `ICanvas` = `{ context: CanvasRenderingContext2D; size: Vector2D }`.
-- Static `renderables` array is **sorted on `register()`** (by `zIndex`, ascending) — no per-frame sort.
+- Renderables are stored per runtime and sorted on registration / z-index changes (ascending); frame rendering uses a stable committed list.
 - `render()`: draws world components first (Background → Foreground), then HUD on top.
-- **Note**: `renderables` is a static field — all `RenderSystem` instances share it. In single-scene use this is fine; for multi-scene, call `EntityRegistry.clear()` on transition which triggers `destroy()` on all entities which unregisters their render components.
+- `dispose()` stops that renderer and detaches the HUD input router only when it owns the runtime's current router configuration. It does not destroy entities; destroy the scene root or dispose the runtime to unregister render components.
 
 #### RenderLayer enum
 
@@ -300,9 +309,11 @@ input.isReleased("Space"); // true only on the frame the key was released
 input.isMouseClick(); // true only the frame of a click
 input.getMousePos(); // Vector2D in client coordinates
 input.clearFrame(); // call at end of frame
+input.dispose(); // remove listeners and clear held/frame state
 ```
 
 Key strings use `KeyboardEvent.key` values (`'ArrowLeft'`, `'Space'`, `'a'`, etc.).
+`init(target)` is idempotent and the first target owns the listener set until `dispose()`. Release and blur listeners are also installed on the target's owner window when available.
 
 ---
 
@@ -346,6 +357,7 @@ EntityProfiler.clear(); // reset data
 ```
 
 `ProfileKind`: `'awake' | 'update' | 'render' | 'destroy'`.
+`start()` instruments existing runtime objects and hooks later entity registration/component attachment. Entity lifecycle overrides defined as class fields are assigned after base-constructor registration, so call `EntityProfiler.instrument(entity)` after construction to instrument those instance fields explicitly.
 
 ---
 
@@ -366,6 +378,7 @@ Renderables are stored per `EcsRuntime` (internally via `WeakMap<EcsRuntime, Ren
 - Render state is isolated across runtimes.
 - You can run multiple independent worlds if each one has its own runtime.
 - Registration/unregistration still happens automatically through `RenderComponent.awake()/destroy()`.
+- Registry `clear()` does not trigger lifecycle methods. Use `runtime.dispose()` (and dispose any `RenderSystem` instances) for full teardown.
 
 ### Sort-on-insert everywhere
 
