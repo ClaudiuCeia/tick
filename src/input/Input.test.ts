@@ -189,6 +189,27 @@ describe("InputManager", () => {
     expect(input.getMousePos().y).toBe(9);
   });
 
+  test("ignores a window-like global without event listener methods", () => {
+    const originalWindow = globalThis.window;
+    Object.defineProperty(globalThis, "window", {
+      value: {},
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      const input = new InputManager();
+      input.init(makeTarget({}));
+      input.dispose();
+    } finally {
+      Object.defineProperty(globalThis, "window", {
+        value: originalWindow,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
   test("returned vectors cannot mutate internal input state", () => {
     const handlers: HandlerMap = {};
     const input = new InputManager();

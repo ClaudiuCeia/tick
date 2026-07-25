@@ -1,5 +1,14 @@
 import { Vector2D } from "../math/Vector2D.ts";
 
+const asEventTarget = (value: unknown): EventTarget | null => {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return null;
+  const candidate = value as Partial<EventTarget>;
+  return typeof candidate.addEventListener === "function" &&
+    typeof candidate.removeEventListener === "function"
+    ? (value as EventTarget)
+    : null;
+};
+
 /**
  * Runtime-scoped input manager with per-frame state tracking.
  *
@@ -112,10 +121,10 @@ export class InputManager {
     this.target.addEventListener("click", this.onClick as EventListener);
     this.target.addEventListener("blur", this.onBlur as EventListener);
 
-    const ownerWindow = (target as EventTarget & { ownerDocument?: { defaultView?: EventTarget } })
+    const ownerWindow = (target as EventTarget & { ownerDocument?: { defaultView?: unknown } })
       .ownerDocument?.defaultView;
     const globalWindow = typeof window === "undefined" ? undefined : window;
-    this.releaseTarget = ownerWindow ?? globalWindow ?? null;
+    this.releaseTarget = asEventTarget(ownerWindow) ?? asEventTarget(globalWindow);
     if (this.releaseTarget === this.target) this.releaseTarget = null;
     this.releaseTarget?.addEventListener("keyup", this.onKeyUp as EventListener);
     this.releaseTarget?.addEventListener("mouseup", this.onMouseUp as EventListener);

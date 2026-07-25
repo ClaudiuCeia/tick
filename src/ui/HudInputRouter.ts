@@ -32,6 +32,7 @@ type RuntimeState = {
   hudViewport: HudViewport | null;
   canvasElement: HTMLCanvasElement | null;
   handlers: AttachedHandlers | null;
+  keyboardTarget: EventTarget | null;
   owner: object | null;
   activePointers: Map<number, HudInputComponent[]>;
   capturedPointerEvents: Set<
@@ -41,6 +42,15 @@ type RuntimeState = {
 
 type NativeConsumableEvent = Event & {
   stopImmediatePropagation?: () => void;
+};
+
+const asEventTarget = (value: unknown): EventTarget | null => {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return null;
+  const candidate = value as Partial<EventTarget>;
+  return typeof candidate.addEventListener === "function" &&
+    typeof candidate.removeEventListener === "function"
+    ? (value as EventTarget)
+    : null;
 };
 
 const clientToCanvas = (point: Vector2D, canvas: HTMLCanvasElement): Vector2D => {
@@ -92,6 +102,7 @@ class HudInputRouterImpl {
         hudViewport: null,
         canvasElement: null,
         handlers: null,
+        keyboardTarget: null,
         owner: null,
         activePointers: new Map(),
         capturedPointerEvents: new Set(),
@@ -233,13 +244,17 @@ class HudInputRouterImpl {
     canvas.addEventListener("click", handlers.click);
     canvas.addEventListener("wheel", handlers.wheel, { passive: false });
 
-    if (typeof window !== "undefined") {
-      window.addEventListener("keydown", handlers.keydown, { capture: true });
-      window.addEventListener("keyup", handlers.keyup, { capture: true });
-    }
+    const ownerWindow = canvas.ownerDocument?.defaultView;
+    const globalWindow = typeof window === "undefined" ? undefined : window;
+    const keyboardTarget = asEventTarget(ownerWindow) ?? asEventTarget(globalWindow);
+    keyboardTarget?.addEventListener("keydown", handlers.keydown as EventListener, {
+      capture: true,
+    });
+    keyboardTarget?.addEventListener("keyup", handlers.keyup as EventListener, { capture: true });
 
     state.canvasElement = canvas;
     state.handlers = handlers;
+    state.keyboardTarget = keyboardTarget;
     state.owner = config.owner ?? null;
   }
 
@@ -249,6 +264,7 @@ class HudInputRouterImpl {
     if (!state.canvasElement || !state.handlers) {
       state.canvasElement = null;
       state.handlers = null;
+      state.keyboardTarget = null;
       state.owner = null;
       state.activePointers.clear();
       return;
@@ -273,13 +289,12 @@ class HudInputRouterImpl {
     canvas.removeEventListener("click", handlers.click);
     canvas.removeEventListener("wheel", handlers.wheel);
 
-    if (typeof window !== "undefined") {
-      window.removeEventListener("keydown", handlers.keydown, true);
-      window.removeEventListener("keyup", handlers.keyup, true);
-    }
+    state.keyboardTarget?.removeEventListener("keydown", handlers.keydown as EventListener, true);
+    state.keyboardTarget?.removeEventListener("keyup", handlers.keyup as EventListener, true);
 
     state.canvasElement = null;
     state.handlers = null;
+    state.keyboardTarget = null;
     state.owner = null;
     state.activePointers.clear();
   }

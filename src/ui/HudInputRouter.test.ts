@@ -588,6 +588,29 @@ describe("HudInputRouter", () => {
     expect(canvas.getListeners("pointerdown")).toHaveLength(0);
   });
 
+  test("ignores a window-like global without event listener methods", () => {
+    const runtime = new EcsRuntime(new EntityRegistry());
+    const originalWindow = globalThis.window;
+    Object.defineProperty(globalThis, "window", {
+      value: {},
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      HudInputRouter.configure(runtime, {
+        canvasElement: new FakeCanvas() as unknown as HTMLCanvasElement,
+      });
+      HudInputRouter.detach(runtime);
+    } finally {
+      Object.defineProperty(globalThis, "window", {
+        value: originalWindow,
+        configurable: true,
+        writable: true,
+      });
+    }
+  });
+
   test("revalidates pointer targets before each callback", () => {
     const runtime = new EcsRuntime(new EntityRegistry());
     const log: string[] = [];
