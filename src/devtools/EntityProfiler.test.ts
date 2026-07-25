@@ -7,6 +7,10 @@ import { TransformComponent } from "../transform/TransformComponent.ts";
 import { Vector2D } from "../math/Vector2D.ts";
 import { EntityProfiler } from "./EntityProfiler.ts";
 import type { ICamera } from "../render/ICamera.ts";
+import { RenderComponent } from "../render/RenderComponent.ts";
+import { RenderLayer } from "../render/RenderLayer.ts";
+import { Component } from "../ecs/Component.ts";
+import { EntityRegistry } from "../ecs/EntityRegistry.ts";
 
 class Node extends Entity {}
 
@@ -17,10 +21,9 @@ class CameraStub extends Entity implements ICamera {
 }
 
 beforeEach(() => {
+  EntityProfiler.stop();
+  EntityProfiler.clear();
   EcsRuntime.reset();
-  (EntityProfiler as unknown as { records: Map<unknown, unknown> }).records = new Map();
-  (EntityProfiler as unknown as { isRunning: boolean }).isRunning = false;
-  (EntityProfiler as unknown as { isHooked: boolean }).isHooked = false;
   (globalThis as unknown as { window: { innerWidth: number; innerHeight: number } }).window = {
     innerWidth: 100,
     innerHeight: 100,
@@ -114,5 +117,184 @@ describe("EntityProfiler", () => {
     expect(rec.samples.awake.count - firstCount).toBe(firstCount);
 
     EntityProfiler.stop();
+  });
+
+  test("records one lifecycle sample for render components that call Component methods", () => {
+    class ProfiledRender extends RenderComponent<Node> {
+      constructor() {
+        super(RenderLayer.HUD);
+      }
+
+      override doRender(): void {}
+    }
+
+    EntityProfiler.start();
+    const node = new Node();
+    node.addComponent(new ProfiledRender());
+    node.awake();
+
+    const record = (EntityProfiler as any).records.get(ProfiledRender);
+    expect(record.kind).toBe("renderComponent");
+    expect(record.samples.awake.count).toBe(1);
+    EntityProfiler.stop();
+  });
+
+  test("stop unpatches lifecycle methods and avoids performance.now overhead", () => {
+    const originalNow = performance.now;
+    let nowCalls = 0;
+    Object.defineProperty(performance, "now", {
+      value: () => ++nowCalls,
+      configurable: true,
+    });
+
+    try {
+      EntityProfiler.start();
+      new Node().awake();
+      EntityProfiler.stop();
+      const callsAtStop = nowCalls;
+
+      new Node().awake();
+      expect(nowCalls).toBe(callsAtStop);
+    } finally {
+      EntityProfiler.stop();
+      Object.defineProperty(performance, "now", {
+        value: originalNow,
+        configurable: true,
+      });
+    }
+  });
+
+  test("measures full concrete overrides and removes instance instrumentation", () => {
+    let clock = 0;
+    class OverrideNode extends Entity {
+      override update(deltaTime: number): void {
+        clock += 2;
+        super.update(deltaTime);
+        clock += 3;
+      }
+    }
+
+    const node = new OverrideNode();
+    const originalNow = performance.now;
+    Object.defineProperty(performance, "now", {
+      value: () => clock,
+      configurable: true,
+    });
+
+    try {
+      EntityProfiler.start();
+      node.update(0);
+
+      const record = (EntityProfiler as any).records.get(OverrideNode);
+      expect(record.samples.update.count).toBe(1);
+      expect(record.samples.update.totalTime).toBe(5);
+      expect(Object.hasOwn(node, "update")).toBe(true);
+
+      EntityProfiler.stop();
+      expect(Object.hasOwn(node, "update")).toBe(false);
+    } finally {
+      EntityProfiler.stop();
+      Object.defineProperty(performance, "now", {
+        value: originalNow,
+        configurable: true,
+      });
+    }
+  });
+
+  test("automatically instruments entities and attached components created after start", () => {
+    let clock = 0;
+    class LateNode extends Entity {
+      override update(deltaTime: number): void {
+        clock += 2;
+        super.update(deltaTime);
+        clock += 3;
+      }
+    }
+    class LateComponent extends Component<LateNode> {
+      override update(deltaTime: number): void {
+        clock += 7;
+        super.update(deltaTime);
+        clock += 11;
+      }
+    }
+
+    const originalRegister = EntityRegistry.prototype.register;
+    const originalAddComponent = Entity.prototype.addComponent;
+    const originalNow = performance.now;
+    Object.defineProperty(performance, "now", {
+      value: () => clock,
+      configurable: true,
+    });
+
+    try {
+      EntityProfiler.start();
+      expect(EntityRegistry.prototype.register).not.toBe(originalRegister);
+      expect(Entity.prototype.addComponent).not.toBe(originalAddComponent);
+
+      const node = new LateNode();
+      const component = new LateComponent();
+      node.addComponent(component);
+      component.update(0);
+      node.update(0);
+
+      const nodeRecord = (EntityProfiler as any).records.get(LateNode);
+      const componentRecord = (EntityProfiler as any).records.get(LateComponent);
+      expect(nodeRecord.samples.update.count).toBe(1);
+      expect(nodeRecord.samples.update.totalTime).toBe(23);
+      expect(componentRecord.samples.update.count).toBe(2);
+      expect(componentRecord.samples.update.totalTime).toBe(36);
+
+      EntityProfiler.stop();
+      expect(EntityRegistry.prototype.register).toBe(originalRegister);
+      expect(Entity.prototype.addComponent).toBe(originalAddComponent);
+      expect(Object.hasOwn(node, "update")).toBe(false);
+      expect(Object.hasOwn(component, "update")).toBe(false);
+    } finally {
+      EntityProfiler.stop();
+      Object.defineProperty(performance, "now", {
+        value: originalNow,
+        configurable: true,
+      });
+    }
+  });
+
+  test("explicitly instruments entity lifecycle class fields after construction", () => {
+    let clock = 0;
+    class FieldNode extends Entity {
+      public override update = (deltaTime: number): void => {
+        clock += 2;
+        super.update(deltaTime);
+        clock += 3;
+      };
+    }
+
+    const originalNow = performance.now;
+    Object.defineProperty(performance, "now", {
+      value: () => clock,
+      configurable: true,
+    });
+
+    try {
+      EntityProfiler.start();
+      const node = new FieldNode();
+      const fieldUpdate = node.update;
+
+      EntityProfiler.instrument(node);
+      expect(node.update).not.toBe(fieldUpdate);
+      node.update(0);
+
+      const record = (EntityProfiler as any).records.get(FieldNode);
+      expect(record.samples.update.count).toBe(1);
+      expect(record.samples.update.totalTime).toBe(5);
+
+      EntityProfiler.stop();
+      expect(node.update).toBe(fieldUpdate);
+    } finally {
+      EntityProfiler.stop();
+      Object.defineProperty(performance, "now", {
+        value: originalNow,
+        configurable: true,
+      });
+    }
   });
 });

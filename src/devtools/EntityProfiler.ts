@@ -2,6 +2,7 @@ import { CollisionEntity } from "../collision/CollisionEntity.ts";
 import { Component } from "../ecs/Component.ts";
 import { EcsRuntime } from "../ecs/EcsRuntime.ts";
 import { Entity } from "../ecs/Entity.ts";
+import { EntityRegistry } from "../ecs/EntityRegistry.ts";
 import { Vector2D } from "../math/Vector2D.ts";
 import type { ICamera } from "../render/ICamera.ts";
 import { RenderComponent } from "../render/RenderComponent.ts";
@@ -13,6 +14,13 @@ type ProfileRecord = {
   kind: "entity" | "component" | "renderComponent";
   samples: Record<ProfileKind, ProfileData>;
   entityRef?: Entity;
+};
+
+type MethodPatch = {
+  target: Record<string, unknown>;
+  method: string;
+  originalDescriptor: PropertyDescriptor | undefined;
+  wrapped: (...args: unknown[]) => unknown;
 };
 
 export type EntityProfilerChildSummary = {
@@ -31,20 +39,34 @@ export type EntityProfilerEntry = {
 
 export type EntityProfilerReport = Record<ProfileKind, EntityProfilerEntry[]>;
 
+/**
+ * Removable lifecycle profiler for ECS entities and components.
+ *
+ * While active, entities created with prototype lifecycle overrides and components attached to an
+ * entity are instrumented automatically. Entity lifecycle methods installed as class fields run
+ * after `Entity` calls `super()`, replacing constructor-time instrumentation; call
+ * `EntityProfiler.instrument(instance)` after construction for those entities.
+ * `stop()` restores all active prototype, discovery, and instance wrappers.
+ */
 export class EntityProfiler {
   private static isRunning = false;
   private static isHooked = false;
   private static records: Map<unknown, ProfileRecord> = new Map();
+  private static patches: MethodPatch[] = [];
+  private static activeSamples = new WeakMap<object, Set<ProfileKind>>();
 
   public static start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
     this.hook();
+    this.instrumentRuntime();
     console.log("%c[Profiler] Started.", "color: lime");
   }
 
   public static stop(): void {
+    if (!this.isRunning && !this.isHooked) return;
     this.isRunning = false;
+    this.unhook();
     console.log("%c[Profiler] Stopped.", "color: orangered");
   }
 
@@ -54,6 +76,40 @@ export class EntityProfiler {
 
   public static isActive(): boolean {
     return this.isRunning;
+  }
+
+  /**
+   * Instruments the lifecycle methods currently installed on an instance.
+   * Use this after constructing an entity whose lifecycle methods are class fields.
+   */
+  public static instrument(instance: Entity | Component): void {
+    if (!this.isRunning) return;
+
+    if (instance instanceof Entity) {
+      this.patchMethod(instance, "awake", "awake", "entity");
+      this.patchMethod(instance, "update", "update", "entity");
+      this.patchMethod(instance, "destroy", "destroy", "entity");
+      return;
+    }
+
+    const kind = instance instanceof RenderComponent ? "renderComponent" : "component";
+    this.patchMethod(instance, "awake", "awake", kind);
+    this.patchMethod(instance, "update", "update", kind);
+    this.patchMethod(instance, "destroy", "destroy", kind);
+    if (instance instanceof RenderComponent) {
+      this.patchMethod(instance, "render", "render", kind);
+    }
+  }
+
+  /** Instruments all objects currently registered in a runtime. */
+  public static instrumentRuntime(runtime: EcsRuntime = EcsRuntime.getCurrent()): void {
+    if (!this.isRunning) return;
+    for (const entity of runtime.registry.getAllEntities()) {
+      this.instrument(entity);
+      for (const component of entity.components) {
+        this.instrument(component);
+      }
+    }
   }
 
   public static hasSamples(kind?: ProfileKind): boolean {
@@ -151,37 +207,126 @@ export class EntityProfiler {
   private static hook(): void {
     if (this.isHooked) return;
 
-    const patch = (proto: object, method: string, kind: ProfileKind, isEntity: boolean) => {
-      const original = (proto as Record<string, unknown>)[method] as (
-        ...args: unknown[]
-      ) => unknown;
-      (proto as Record<string, unknown>)[method] = function (this: unknown, ...args: unknown[]) {
-        const start = performance.now();
+    this.patchMethod(Entity.prototype, "awake", "awake", "entity");
+    this.patchMethod(Entity.prototype, "update", "update", "entity");
+    this.patchMethod(Entity.prototype, "destroy", "destroy", "entity");
+
+    this.patchMethod(Component.prototype, "awake", "awake", "component");
+    this.patchMethod(Component.prototype, "update", "update", "component");
+    this.patchMethod(Component.prototype, "destroy", "destroy", "component");
+
+    this.patchMethod(RenderComponent.prototype, "awake", "awake", "renderComponent");
+    this.patchMethod(RenderComponent.prototype, "update", "update", "renderComponent");
+    this.patchMethod(RenderComponent.prototype, "render", "render", "renderComponent");
+    this.patchMethod(RenderComponent.prototype, "destroy", "destroy", "renderComponent");
+
+    this.patchHook(EntityRegistry.prototype, "register", (original) => {
+      return function (this: EntityRegistry, ...args: unknown[]): unknown {
         const result = original.apply(this, args);
-        EntityProfiler.record(
-          (this as { constructor: unknown }).constructor,
-          isEntity ? "entity" : "component",
-          kind,
-          performance.now() - start,
-          this instanceof Entity ? this : undefined,
-        );
+        const entity = args[0];
+        if (entity instanceof Entity) {
+          EntityProfiler.instrument(entity);
+        }
         return result;
       };
-    };
-
-    patch(Entity.prototype, "awake", "awake", true);
-    patch(Entity.prototype, "update", "update", true);
-    patch(Entity.prototype, "destroy", "destroy", true);
-
-    patch(Component.prototype, "awake", "awake", false);
-    patch(Component.prototype, "update", "update", false);
-    patch(Component.prototype, "destroy", "destroy", false);
-
-    patch(RenderComponent.prototype, "awake", "awake", false);
-    patch(RenderComponent.prototype, "update", "update", false);
-    patch(RenderComponent.prototype, "render", "render", false);
-    patch(RenderComponent.prototype, "destroy", "destroy", false);
+    });
+    this.patchHook(Entity.prototype, "addComponent", (original) => {
+      return function (this: Entity, ...args: unknown[]): unknown {
+        const component = args[0];
+        if (component instanceof Component) {
+          EntityProfiler.instrument(component);
+        }
+        return original.apply(this, args);
+      };
+    });
     this.isHooked = true;
+  }
+
+  private static patchHook(
+    targetObject: object,
+    method: string,
+    createWrapped: (original: (...args: unknown[]) => unknown) => (...args: unknown[]) => unknown,
+  ): void {
+    const target = targetObject as Record<string, unknown>;
+    if (this.hasCurrentPatch(target, method)) return;
+    const original = target[method] as (...args: unknown[]) => unknown;
+    if (typeof original !== "function") return;
+    const originalDescriptor = Object.getOwnPropertyDescriptor(target, method);
+    const wrapped = createWrapped(original);
+    target[method] = wrapped;
+    this.patches.push({ target, method, originalDescriptor, wrapped });
+  }
+
+  private static patchMethod(
+    targetObject: object,
+    method: string,
+    profileKind: ProfileKind,
+    recordKind: ProfileRecord["kind"],
+  ): void {
+    const target = targetObject as Record<string, unknown>;
+    if (this.hasCurrentPatch(target, method)) return;
+    const original = target[method] as (...args: unknown[]) => unknown;
+    if (typeof original !== "function") return;
+    const originalDescriptor = Object.getOwnPropertyDescriptor(target, method);
+    const wrapped = function (this: object, ...args: unknown[]) {
+      let active = EntityProfiler.activeSamples.get(this);
+      if (!active) {
+        active = new Set();
+        EntityProfiler.activeSamples.set(this, active);
+      }
+
+      if (active.has(profileKind)) {
+        return original.apply(this, args);
+      }
+
+      active.add(profileKind);
+      const start = performance.now();
+      try {
+        return original.apply(this, args);
+      } finally {
+        try {
+          EntityProfiler.record(
+            (this as { constructor: unknown }).constructor,
+            recordKind,
+            profileKind,
+            performance.now() - start,
+            this instanceof Entity ? this : undefined,
+          );
+        } finally {
+          active.delete(profileKind);
+        }
+      }
+    };
+    target[method] = wrapped;
+    EntityProfiler.patches.push({ target, method, originalDescriptor, wrapped });
+  }
+
+  private static hasCurrentPatch(target: Record<string, unknown>, method: string): boolean {
+    const patchIndex = this.patches.findIndex(
+      (patch) => patch.target === target && patch.method === method,
+    );
+    if (patchIndex === -1) return false;
+    const patch = this.patches[patchIndex]!;
+    if (target[method] === patch.wrapped) return true;
+
+    // Class fields and deliberate runtime replacements supersede the old wrapper.
+    this.patches.splice(patchIndex, 1);
+    return false;
+  }
+
+  private static unhook(): void {
+    for (let i = this.patches.length - 1; i >= 0; i--) {
+      const patch = this.patches[i];
+      if (!patch || patch.target[patch.method] !== patch.wrapped) continue;
+      if (patch.originalDescriptor) {
+        Object.defineProperty(patch.target, patch.method, patch.originalDescriptor);
+      } else {
+        delete patch.target[patch.method];
+      }
+    }
+    this.patches = [];
+    this.activeSamples = new WeakMap();
+    this.isHooked = false;
   }
 
   private static record(
