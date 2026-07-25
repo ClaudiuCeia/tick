@@ -14,4 +14,4 @@ Visual demo for `HudViewport` design-space rendering.
 bun run example:hud-viewport
 ```
 
-Then open `http://localhost:5177`.
+Then open `http://127.0.0.1:5177`.

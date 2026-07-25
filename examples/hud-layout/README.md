@@ -16,4 +16,4 @@ RPG/MOBA-style HUD demo using `HudLayoutNodeComponent`, `HudStackLayoutComponent
 bun run example:hud-layout
 ```
 
-Then open `http://localhost:5178`.
+Then open `http://127.0.0.1:5178`.

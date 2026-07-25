@@ -8,4 +8,4 @@ Minimal demo for `HudLayoutDebugRenderComponent`.
 bun run example:hud-debug
 ```
 
-Open `http://localhost:5179`.
+Open `http://127.0.0.1:5179`.

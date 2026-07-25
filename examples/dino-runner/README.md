@@ -24,12 +24,12 @@ Small endless runner inspired by the Chrome dinosaur game.
 bun run example:dino-runner
 ```
 
-Then open `http://localhost:5174`.
+Then open `http://127.0.0.1:5174`.
 
 Optional pixel upscale (nearest-neighbor):
 
-- `http://localhost:5174?pixelScale=2`
-- `http://localhost:5174?pixelScale=3`
+- `http://127.0.0.1:5174?pixelScale=2`
+- `http://127.0.0.1:5174?pixelScale=3`
 
 ## Assets
 

@@ -22,4 +22,4 @@ Interactive collision playground focused on the upgraded collision stack.
 bun run example:collision-lab
 ```
 
-Then open `http://localhost:5175`.
+Then open `http://127.0.0.1:5175`.

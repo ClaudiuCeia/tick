@@ -23,7 +23,7 @@ Small playable example showing how to wire `tick` into a simple arcade loop.
 bun run example:bouncy-arena
 ```
 
-Then open `http://localhost:5173`.
+Then open `http://127.0.0.1:5173`.
 
 ## Test
 

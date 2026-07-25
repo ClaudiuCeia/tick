@@ -1,11 +1,4 @@
-import {
-  Component,
-  EcsRuntime,
-  Entity,
-  SystemPhase,
-  SystemTickMode,
-  World,
-} from "../../src/index.ts";
+import { Component, EcsRuntime, Entity, SystemPhase, SystemTickMode, World } from "../../index.ts";
 import { WorldLoop } from "../shared/WorldLoop.ts";
 
 const GRID_SIZE = 40;

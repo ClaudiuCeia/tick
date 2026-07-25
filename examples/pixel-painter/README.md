@@ -8,7 +8,7 @@ Paint pixels on a grid canvas. Every painted pixel is autosaved to `localStorage
 bun run example:pixel-painter
 ```
 
-Then open `http://localhost:5176/`.
+Then open `http://127.0.0.1:5176/`.
 
 ## Controls
 
