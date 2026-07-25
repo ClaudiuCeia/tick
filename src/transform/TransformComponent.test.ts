@@ -105,4 +105,73 @@ describe("TransformComponent", () => {
 
     expect(() => childTx.anchorTo(parent)).toThrow("Entity does not have a TransformComponent");
   });
+
+  test("globalTransform always returns an independent snapshot", () => {
+    const tx = new TransformComponent({
+      position: new Vector2D(3, 4),
+      rotation: 0.5,
+      scale: 2,
+    });
+
+    const snapshot = tx.globalTransform;
+    snapshot.position.set(100, 100);
+    snapshot.rotation = 10;
+    snapshot.scale = 10;
+
+    expect(tx.globalTransform.position).toEqual(new Vector2D(3, 4));
+    expect(tx.globalTransform.rotation).toBe(0.5);
+    expect(tx.globalTransform.scale).toBe(2);
+  });
+
+  test("anchorTo rejects direct and indirect cycles", () => {
+    const a = new TransformComponent();
+    const b = new TransformComponent();
+    const c = new TransformComponent();
+    b.anchorTo(a);
+    c.anchorTo(b);
+
+    expect(() => a.anchorTo(a)).toThrow("cycle");
+    expect(() => a.anchorTo(c)).toThrow("cycle");
+    expect(() => {
+      a.parent = c;
+    }).toThrow("cycle");
+  });
+
+  test("translateWorld converts displacement through parent rotation and scale", () => {
+    const parent = new TransformComponent({
+      position: Vector2D.zero,
+      rotation: Math.PI / 2,
+      scale: 2,
+    });
+    const child = new TransformComponent();
+    child.anchorTo(parent).translateWorld(10, 0);
+
+    expect(child.globalTransform.position.x).toBeCloseTo(10);
+    expect(child.globalTransform.position.y).toBeCloseTo(0);
+  });
+
+  test("rejects invalid scales", () => {
+    expect(
+      () => new TransformComponent({ position: Vector2D.zero, rotation: 0, scale: 0 }),
+    ).toThrow("scale");
+    expect(() => new TransformComponent().setScale(Number.NaN)).toThrow("scale");
+    expect(() => new TransformComponent().scaleBy(-1)).toThrow("scale");
+  });
+
+  test("rejects non-finite positions and rotations at mutation and snapshot boundaries", () => {
+    expect(
+      () =>
+        new TransformComponent({
+          position: new Vector2D(Number.NaN, 0),
+          rotation: 0,
+          scale: 1,
+        }),
+    ).toThrow("position.x");
+    expect(() => new TransformComponent().setPosition(Infinity, 0)).toThrow("position.x");
+    expect(() => new TransformComponent().setRotation(Number.NaN)).toThrow("rotation");
+
+    const transform = new TransformComponent();
+    transform.transform.position.x = Number.NaN;
+    expect(() => transform.globalTransform).toThrow("position.x");
+  });
 });

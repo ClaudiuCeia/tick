@@ -142,11 +142,13 @@ describe("Vector2D — distanceTo & angleTo", () => {
     expect(new Vector2D(0, 0).distanceTo(new Vector2D(3, 4))).toBeCloseTo(5);
   });
 
-  test("angleTo returns atan2 of difference", () => {
+  test("angleTo points from this vector toward the target", () => {
     const angle = new Vector2D(0, 0).angleTo(new Vector2D(1, 0));
-    // angleTo is atan2(dy, dx) where d = this - other
-    // dy = 0-0 = 0, dx = 0-1 = -1  → atan2(0,-1) = π
-    expect(angle).toBeCloseTo(Math.PI);
+    expect(angle).toBeCloseTo(0);
+  });
+
+  test("angleFrom preserves the legacy reverse direction explicitly", () => {
+    expect(new Vector2D(0, 0).angleFrom(new Vector2D(1, 0))).toBeCloseTo(Math.PI);
   });
 });
 

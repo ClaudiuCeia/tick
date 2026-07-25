@@ -32,4 +32,19 @@ describe("LCG", () => {
     const values = new Set(Array.from({ length: 20 }, () => rng.random()));
     expect(values.size).toBeGreaterThan(1);
   });
+
+  test("normalizes equivalent seeds to uint32", () => {
+    const negative = new LCG(-1);
+    const uint32 = new LCG(0xffffffff);
+    const fractional = new LCG(42.9);
+    const integer = new LCG(42);
+
+    expect(negative.random()).toBe(uint32.random());
+    expect(fractional.random()).toBe(integer.random());
+  });
+
+  test("rejects non-finite seeds", () => {
+    expect(() => new LCG(Number.NaN)).toThrow("seed must be finite");
+    expect(() => new LCG(Number.POSITIVE_INFINITY)).toThrow("seed must be finite");
+  });
 });

@@ -44,4 +44,20 @@ describe("PhysicsBodyComponent", () => {
     expect(body.isSleeping).toBe(false);
     expect(body.canSleep).toBe(false);
   });
+
+  test("getVelocity does not expose mutable internal state", () => {
+    const body = new PhysicsBodyComponent();
+    body.setVelocity(new Vector2D(3, 4));
+    body.getVelocity().set(100, 100);
+
+    expect(body.getVelocity()).toEqual(new Vector2D(3, 4));
+  });
+
+  test("rejects invalid mass and non-finite vectors", () => {
+    expect(() => new PhysicsBodyComponent({ mass: 0 })).toThrow("mass");
+    expect(() => new PhysicsBodyComponent().setMass(Number.NaN)).toThrow("mass");
+    expect(() => new PhysicsBodyComponent().setVelocity(new Vector2D(Infinity, 0))).toThrow(
+      "Velocity.x",
+    );
+  });
 });

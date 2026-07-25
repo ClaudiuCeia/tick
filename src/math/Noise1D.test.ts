@@ -29,4 +29,13 @@ describe("fBm1D", () => {
     const b = fBm1D(3.14, 6, 2.2, 0.45);
     expect(a).toBe(b);
   });
+
+  test("rejects invalid fBm parameters", () => {
+    expect(() => fBm1D(0, 0)).toThrow("octaves");
+    expect(() => fBm1D(0, 1.5)).toThrow("octaves");
+    expect(() => fBm1D(0, 2, 0)).toThrow("lacunarity");
+    expect(() => fBm1D(0, 2, 2, -0.1)).toThrow("gain");
+    expect(() => fBm1D(0, 2, 2, 1.1)).toThrow("gain");
+    expect(() => fBm1D(Number.NaN)).toThrow("x must be finite");
+  });
 });

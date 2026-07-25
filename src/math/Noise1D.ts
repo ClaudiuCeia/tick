@@ -47,12 +47,26 @@ export function noise1D(x: number): number {
  * @param gain       amplitude multiplier each octave (default 0.5)
  */
 export function fBm1D(x: number, octaves = 5, lacunarity = 2, gain = 0.5): number {
+  if (!Number.isFinite(x)) throw new Error("fBm1D x must be finite");
+  if (!Number.isSafeInteger(octaves) || octaves <= 0) {
+    throw new Error("fBm1D octaves must be a positive integer");
+  }
+  if (!Number.isFinite(lacunarity) || lacunarity <= 0) {
+    throw new Error("fBm1D lacunarity must be finite and > 0");
+  }
+  if (!Number.isFinite(gain) || gain < 0 || gain > 1) {
+    throw new Error("fBm1D gain must be finite and in [0, 1]");
+  }
+
   let sum = 0;
   let amp = 1;
   let freq = 1;
   let norm = 0;
 
   for (let i = 0; i < octaves; i++) {
+    if (!Number.isFinite(x * freq) || !Number.isFinite(amp)) {
+      throw new Error("fBm1D parameters exceed the finite numeric range");
+    }
     sum += noise1D(x * freq) * amp;
     norm += amp;
     amp *= gain;

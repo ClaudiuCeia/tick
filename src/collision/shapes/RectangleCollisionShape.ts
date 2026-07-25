@@ -1,39 +1,65 @@
-import type { CollisionAnchor, CollisionShape } from "../CollisionShape.ts";
+import {
+  delegateCollisionCheck,
+  delegateCollisionMtv,
+  type CollisionAnchor,
+  type CollisionShape,
+} from "../CollisionShape.ts";
 import type { Transform } from "../../transform/TransformComponent.ts";
 import { Vector2D } from "../../math/Vector2D.ts";
 import { CircleCollisionShape } from "./CircleCollisionShape.ts";
+import { CurveCollisionShape } from "./CurveCollisionShape.ts";
+
+const requirePositiveFinite = (value: number, name: string): number => {
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be finite and > 0`);
+  return value;
+};
+
+const validateTransform = (transform: Transform): void => {
+  if (
+    !Number.isFinite(transform.position.x) ||
+    !Number.isFinite(transform.position.y) ||
+    !Number.isFinite(transform.rotation)
+  ) {
+    throw new Error("Rectangle transform position and rotation must be finite");
+  }
+  requirePositiveFinite(transform.scale, "Transform scale");
+};
 
 export class RectangleCollisionShape implements CollisionShape {
   constructor(
     public width: number,
     public height: number,
-  ) {}
+  ) {
+    requirePositiveFinite(width, "Rectangle width");
+    requirePositiveFinite(height, "Rectangle height");
+  }
 
   getAABB(transform: Transform, anchor: CollisionAnchor) {
-    const w = this.width * transform.scale;
-    const h = this.height * transform.scale;
-    let x = transform.position.x;
-    let y = transform.position.y;
-    let aabbWidth = w;
-    let aabbHeight = h;
-
-    if (anchor === "center") {
-      x -= w / 2;
-      y -= h / 2;
-    }
-
-    if (transform.rotation !== 0) {
-      const cos = Math.cos(transform.rotation);
-      const sin = Math.sin(transform.rotation);
-      const hw = w / 2;
-      const hh = h / 2;
-      x -= hw * cos - hh * sin;
-      y -= hw * sin + hh * cos;
-      aabbWidth = Math.abs(w * cos) + Math.abs(h * sin);
-      aabbHeight = Math.abs(w * sin) + Math.abs(h * cos);
-    }
-
-    return { x, y, width: aabbWidth, height: aabbHeight };
+    requirePositiveFinite(this.width, "Rectangle width");
+    requirePositiveFinite(this.height, "Rectangle height");
+    validateTransform(transform);
+    const scale = transform.scale;
+    const w = this.width * scale;
+    const h = this.height * scale;
+    const left = anchor === "center" ? -w / 2 : 0;
+    const top = anchor === "center" ? -h / 2 : 0;
+    const right = left + w;
+    const bottom = top + h;
+    const cos = Math.cos(transform.rotation);
+    const sin = Math.sin(transform.rotation);
+    const x1 = transform.position.x + left * cos - top * sin;
+    const y1 = transform.position.y + left * sin + top * cos;
+    const x2 = transform.position.x + right * cos - top * sin;
+    const y2 = transform.position.y + right * sin + top * cos;
+    const x3 = transform.position.x + right * cos - bottom * sin;
+    const y3 = transform.position.y + right * sin + bottom * cos;
+    const x4 = transform.position.x + left * cos - bottom * sin;
+    const y4 = transform.position.y + left * sin + bottom * cos;
+    const minX = Math.min(x1, x2, x3, x4);
+    const maxX = Math.max(x1, x2, x3, x4);
+    const minY = Math.min(y1, y2, y3, y4);
+    const maxY = Math.max(y1, y2, y3, y4);
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
   }
 
   isCollidingWith(
@@ -50,10 +76,16 @@ export class RectangleCollisionShape implements CollisionShape {
         a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
       );
     }
-    return other.isCollidingWith(this, transformB, anchorB, transformA, anchorA);
+    if (other instanceof CircleCollisionShape || other instanceof CurveCollisionShape) {
+      return other.isCollidingWith(this, transformB, anchorB, transformA, anchorA);
+    }
+    return delegateCollisionCheck(this, other, transformA, anchorA, transformB, anchorB);
   }
 
   containsPoint(point: Vector2D, transform: Transform, anchor: CollisionAnchor): boolean {
+    requirePositiveFinite(this.width, "Rectangle width");
+    requirePositiveFinite(this.height, "Rectangle height");
+    validateTransform(transform);
     const width = this.width * transform.scale;
     const height = this.height * transform.scale;
     let px = point.x - transform.position.x;
@@ -77,8 +109,10 @@ export class RectangleCollisionShape implements CollisionShape {
   }
 
   resize(width: number, height?: number): void {
-    this.width = width;
-    if (height !== undefined) this.height = height;
+    this.width = requirePositiveFinite(width, "Rectangle width");
+    if (height !== undefined) {
+      this.height = requirePositiveFinite(height, "Rectangle height");
+    }
   }
 
   /** Returns the MTV to push *this* out of `other` (rectangle only). */
@@ -94,7 +128,14 @@ export class RectangleCollisionShape implements CollisionShape {
       return mtvCircle ? mtvCircle.negate() : null;
     }
 
-    if (!(other instanceof RectangleCollisionShape)) return null;
+    if (other instanceof CurveCollisionShape) {
+      const curveMtv = other.getCollisionNormal(this, transformB, anchorB, transformA, anchorA);
+      return curveMtv ? curveMtv.negate() : null;
+    }
+
+    if (!(other instanceof RectangleCollisionShape)) {
+      return delegateCollisionMtv(this, other, transformA, anchorA, transformB, anchorB);
+    }
 
     const aabbA = this.getAABB(transformA, anchorA);
     const aabbB = other.getAABB(transformB, anchorB);

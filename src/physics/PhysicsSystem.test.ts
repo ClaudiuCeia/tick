@@ -58,6 +58,17 @@ class PhysicsEntity extends Entity {
   public getPosition(): Vector2D {
     return this.getComponent(TransformComponent).transform.position;
   }
+
+  public getGlobalPosition(): Vector2D {
+    return this.getComponent(TransformComponent).globalTransform.position;
+  }
+}
+
+class PhysicsParent extends Entity {
+  constructor(transform: TransformComponent) {
+    super();
+    this.addComponent(transform);
+  }
 }
 
 const runFixedSteps = (world: World, steps: number, dt: number): void => {
@@ -140,6 +151,128 @@ describe("PhysicsSystem", () => {
     expect(distance).toBeGreaterThan(18);
   });
 
+  test("directional impact resolves correctly regardless of pair insertion order", () => {
+    const runImpact = (dynamicFirst: boolean): number => {
+      EcsRuntime.reset();
+      const system = new PhysicsSystem({
+        gravity: Vector2D.zero,
+        velocityIterations: 4,
+        positionIterations: 1,
+      });
+      let dynamic: PhysicsEntity;
+      let wall: PhysicsEntity;
+      if (dynamicFirst) {
+        dynamic = new PhysicsEntity({
+          position: new Vector2D(0, 0),
+          restitution: 1,
+        });
+        wall = new PhysicsEntity({
+          position: new Vector2D(15, 0),
+          bodyType: PhysicsBodyType.Static,
+          restitution: 1,
+        });
+      } else {
+        wall = new PhysicsEntity({
+          position: new Vector2D(15, 0),
+          bodyType: PhysicsBodyType.Static,
+          restitution: 1,
+        });
+        dynamic = new PhysicsEntity({
+          position: new Vector2D(0, 0),
+          restitution: 1,
+        });
+      }
+      dynamic.awake();
+      wall.awake();
+      dynamic.getBody().setVelocity(new Vector2D(100, 0));
+
+      system.update(0);
+      return dynamic.getBody().getVelocity().x;
+    };
+
+    const dynamicFirst = runImpact(true);
+    const staticFirst = runImpact(false);
+    expect(dynamicFirst).toBeLessThan(0);
+    expect(staticFirst).toBeLessThan(0);
+    expect(dynamicFirst).toBeCloseTo(staticFirst, 8);
+  });
+
+  test("position iterations refresh penetration instead of reapplying a stale MTV", () => {
+    const system = new PhysicsSystem({
+      gravity: Vector2D.zero,
+      positionIterations: 8,
+      maxPenetrationCorrection: 100,
+      penetrationSlop: 0,
+    });
+    const a = new PhysicsEntity({ position: new Vector2D(0, 0) });
+    const b = new PhysicsEntity({ position: new Vector2D(10, 0) });
+    a.awake();
+    b.awake();
+
+    system.update(0);
+
+    const distance = Math.abs(a.getPosition().x - b.getPosition().x);
+    expect(distance).toBeGreaterThan(19.9);
+    expect(distance).toBeLessThanOrEqual(20);
+  });
+
+  test("exact-center static overlap resolves dynamic body consistently in either insertion order", () => {
+    const runOverlap = (dynamicFirst: boolean): number => {
+      EcsRuntime.reset();
+      const system = new PhysicsSystem({
+        gravity: Vector2D.zero,
+        positionIterations: 1,
+        maxPenetrationCorrection: 1,
+      });
+      let dynamic: PhysicsEntity;
+      let fixed: PhysicsEntity;
+      if (dynamicFirst) {
+        dynamic = new PhysicsEntity({ position: Vector2D.zero });
+        fixed = new PhysicsEntity({ position: Vector2D.zero, bodyType: PhysicsBodyType.Static });
+      } else {
+        fixed = new PhysicsEntity({ position: Vector2D.zero, bodyType: PhysicsBodyType.Static });
+        dynamic = new PhysicsEntity({ position: Vector2D.zero });
+      }
+      dynamic.awake();
+      fixed.awake();
+
+      system.update(0);
+      return dynamic.getPosition().y;
+    };
+
+    const dynamicFirst = runOverlap(true);
+    const staticFirst = runOverlap(false);
+    expect(dynamicFirst).toBeLessThan(0);
+    expect(staticFirst).toBeLessThan(0);
+    expect(dynamicFirst).toBeCloseTo(staticFirst, 8);
+  });
+
+  test("deeply overlapping body remains awake until positional correction finishes", () => {
+    const system = new PhysicsSystem({
+      gravity: Vector2D.zero,
+      positionIterations: 1,
+      maxPenetrationCorrection: 1,
+      penetrationSlop: 0.01,
+      sleepLinearThreshold: 1,
+      sleepTimeThreshold: 0.02,
+    });
+    const fixed = new PhysicsEntity({
+      position: Vector2D.zero,
+      bodyType: PhysicsBodyType.Static,
+    });
+    const dynamic = new PhysicsEntity({ position: Vector2D.zero, canSleep: true });
+    fixed.awake();
+    dynamic.awake();
+
+    for (let i = 0; i < 5; i++) system.update(0.02);
+    expect(dynamic.getBody().isSleeping).toBe(false);
+    expect(Math.abs(dynamic.getPosition().y)).toBeLessThan(20);
+
+    for (let i = 0; i < 30; i++) system.update(0.02);
+    expect(Math.abs(dynamic.getPosition().y)).toBeGreaterThanOrEqual(19.98);
+    expect(dynamic.getBody().isSleeping).toBe(true);
+  });
+
   test("friction reduces tangential velocity on contact", () => {
     const world = new World({ fixedDeltaTime: 1 / 120 });
     const system = new PhysicsSystem({ gravity: new Vector2D(0, 900), velocityIterations: 8 });
@@ -183,6 +316,62 @@ describe("PhysicsSystem", () => {
     runFixedSteps(world, 20, 1 / 60);
 
     expect(body.getBody().isSleeping).toBe(true);
+  });
+
+  test("resting contact can accumulate sleep time under gravity", () => {
+    const world = new World({ fixedDeltaTime: 1 / 60 });
+    const system = new PhysicsSystem({
+      gravity: new Vector2D(0, 900),
+      sleepLinearThreshold: 20,
+      sleepTimeThreshold: 0.12,
+      velocityIterations: 6,
+    });
+    world.addSystem(system);
+    const floor = new PhysicsEntity({
+      position: new Vector2D(0, 20),
+      width: 100,
+      bodyType: PhysicsBodyType.Static,
+    });
+    const body = new PhysicsEntity({
+      position: new Vector2D(0, 0),
+      canSleep: true,
+    });
+    floor.awake();
+    body.awake();
+
+    runFixedSteps(world, 30, 1 / 60);
+
+    expect(body.getBody().isSleeping).toBe(true);
+  });
+
+  test("world velocity remains world-aligned for a parented transform", () => {
+    const system = new PhysicsSystem({ gravity: Vector2D.zero });
+    const parent = new PhysicsParent(
+      new TransformComponent({
+        position: Vector2D.zero,
+        rotation: Math.PI / 2,
+        scale: 2,
+      }),
+    );
+    const body = new PhysicsEntity({
+      position: Vector2D.zero,
+      bodyType: PhysicsBodyType.Kinematic,
+    });
+    parent.addChild(body);
+    parent.awake();
+    body.getBody().setVelocity(new Vector2D(10, 0));
+
+    system.update(1);
+
+    expect(body.getGlobalPosition().x).toBeCloseTo(10);
+    expect(body.getGlobalPosition().y).toBeCloseTo(0);
+  });
+
+  test("rejects invalid solver options and delta times", () => {
+    expect(() => new PhysicsSystem({ broadphaseCellSize: 0 })).toThrow("cellSize");
+    expect(() => new PhysicsSystem({ positionIterations: Number.NaN })).toThrow("iterations");
+    expect(() => new PhysicsSystem({ gravity: new Vector2D(Infinity, 0) })).toThrow("gravity");
+    expect(() => new PhysicsSystem().update(-1)).toThrow("delta time");
   });
 
   test("same initial state and dt sequence produce same final state", () => {

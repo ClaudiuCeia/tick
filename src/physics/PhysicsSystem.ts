@@ -16,14 +16,26 @@ type BodyEntry = {
 };
 
 type Contact = {
-  key: string;
+  orderA: number;
+  orderB: number;
   a: BodyEntry;
   b: BodyEntry;
   normal: Vector2D;
   penetration: number;
+  coincidentNormal: Vector2D | null;
 };
 
 const EPS = 1e-8;
+const requireFiniteAtLeast = (value: number, minimum: number, name: string): number => {
+  if (!Number.isFinite(value) || value < minimum) {
+    throw new Error(`${name} must be finite and >= ${minimum}`);
+  }
+  return value;
+};
+const requireIterationCount = (value: number, name: string): number => {
+  if (!Number.isFinite(value) || value < 1) throw new Error(`${name} must be finite and >= 1`);
+  return Math.floor(value);
+};
 
 export class PhysicsSystem implements System {
   public readonly phase = SystemPhase.Collision;
@@ -51,55 +63,93 @@ export class PhysicsSystem implements System {
 
   constructor(options: PhysicsSystemOptions = {}) {
     this.gravity = options.gravity?.clone() ?? new Vector2D(0, 980);
-    this.velocityIterations = Math.max(1, Math.floor(options.velocityIterations ?? 4));
-    this.positionIterations = Math.max(1, Math.floor(options.positionIterations ?? 2));
-    this.maxPenetrationCorrection = Math.max(0, options.maxPenetrationCorrection ?? 8);
-    this.penetrationSlop = Math.max(0, options.penetrationSlop ?? 0.01);
-    this.sleepLinearThreshold = Math.max(0, options.sleepLinearThreshold ?? 8);
-    this.sleepTimeThreshold = Math.max(0, options.sleepTimeThreshold ?? 0.35);
+    if (!Number.isFinite(this.gravity.x) || !Number.isFinite(this.gravity.y)) {
+      throw new Error("Physics gravity must be finite");
+    }
+    this.velocityIterations = requireIterationCount(
+      options.velocityIterations ?? 4,
+      "Velocity iterations",
+    );
+    this.positionIterations = requireIterationCount(
+      options.positionIterations ?? 2,
+      "Position iterations",
+    );
+    this.maxPenetrationCorrection = requireFiniteAtLeast(
+      options.maxPenetrationCorrection ?? 8,
+      0,
+      "Maximum penetration correction",
+    );
+    this.penetrationSlop = requireFiniteAtLeast(
+      options.penetrationSlop ?? 0.01,
+      0,
+      "Penetration slop",
+    );
+    this.sleepLinearThreshold = requireFiniteAtLeast(
+      options.sleepLinearThreshold ?? 8,
+      0,
+      "Sleep linear threshold",
+    );
+    this.sleepTimeThreshold = requireFiniteAtLeast(
+      options.sleepTimeThreshold ?? 0.35,
+      0,
+      "Sleep time threshold",
+    );
     this.broadphase = new SpatialHashBroadphase(options.broadphaseCellSize ?? 64);
   }
 
   public update(deltaTime: number): void {
+    requireFiniteAtLeast(deltaTime, 0, "Physics delta time");
     const entries = this.collectBodies();
 
     this.integrate(deltaTime, entries);
 
-    const pairs = this.broadphase.queryPairs(entries.map((entry) => entry.collider));
-    const colliderToBody = new Map(entries.map((entry) => [entry.collider.id, entry]));
+    const colliders = entries.map((entry) => entry.collider);
+    const colliderToBody = new Map<CollisionEntity, { entry: BodyEntry; order: number }>();
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]!;
+      colliderToBody.set(entry.collider, { entry, order: i });
+    }
+    const pairs = this.broadphase.queryPairs(colliders);
 
     const contacts: Contact[] = [];
-    const touchedDynamicBodies = new Set<PhysicsBodyComponent>();
     for (const [colA, colB] of pairs) {
-      const a = colliderToBody.get(colA.id);
-      const b = colliderToBody.get(colB.id);
-      if (!a || !b) continue;
+      const itemA = colliderToBody.get(colA);
+      const itemB = colliderToBody.get(colB);
+      if (!itemA || !itemB) continue;
+      const a = itemA.entry;
+      const b = itemB.entry;
 
-      if (!a.collider.isColliding(b.collider)) continue;
       const mtv = a.collider.getCollisionNormal(b.collider);
       if (!mtv) continue;
 
       const penetration = mtv.magnitude;
       if (penetration <= EPS) continue;
 
-      const normal = mtv.normalize();
-      const key =
-        a.collider.id < b.collider.id
-          ? `${a.collider.id}:${b.collider.id}`
-          : `${b.collider.id}:${a.collider.id}`;
-      contacts.push({ key, a, b, normal, penetration });
-      if (a.body.type === PhysicsBodyType.Dynamic) touchedDynamicBodies.add(a.body);
-      if (b.body.type === PhysicsBodyType.Dynamic) touchedDynamicBodies.add(b.body);
+      const contact: Contact = {
+        orderA: itemA.order,
+        orderB: itemB.order,
+        a,
+        b,
+        normal: Vector2D.zero,
+        penetration,
+        coincidentNormal: null,
+      };
+      this.configureContactGeometry(contact, mtv, true);
+      contacts.push(contact);
 
-      if (this.canMove(a.body) && !a.body.isSleeping) {
-        b.body.wake();
+      if (this.hasMeaningfulPenetration(contact.penetration)) {
+        if (a.body.type === PhysicsBodyType.Dynamic && a.body.isSleeping) a.body.wake();
+        if (b.body.type === PhysicsBodyType.Dynamic && b.body.isSleeping) b.body.wake();
       }
-      if (this.canMove(b.body) && !b.body.isSleeping) {
-        a.body.wake();
+
+      const relativeSpeed = b.body.getVelocity().subtract(a.body.getVelocity()).magnitude;
+      if (relativeSpeed > this.sleepLinearThreshold) {
+        if (a.body.isSleeping && this.canMove(b.body) && !b.body.isSleeping) a.body.wake();
+        if (b.body.isSleeping && this.canMove(a.body) && !a.body.isSleeping) b.body.wake();
       }
     }
 
-    contacts.sort((a, b) => a.key.localeCompare(b.key));
+    contacts.sort((a, b) => a.orderA - b.orderA || a.orderB - b.orderB);
 
     for (let i = 0; i < this.velocityIterations; i++) {
       for (const contact of contacts) {
@@ -113,7 +163,25 @@ export class PhysicsSystem implements System {
       }
     }
 
-    this.updateSleeping(deltaTime, entries, touchedDynamicBodies);
+    const activeContactBodies = new Set<PhysicsBodyComponent>();
+    for (const contact of contacts) {
+      const relativeSpeed = contact.b.body
+        .getVelocity()
+        .subtract(contact.a.body.getVelocity()).magnitude;
+      if (relativeSpeed > this.sleepLinearThreshold) {
+        activeContactBodies.add(contact.a.body);
+        activeContactBodies.add(contact.b.body);
+      }
+      if (this.refreshContact(contact) && this.hasMeaningfulPenetration(contact.penetration)) {
+        if (contact.a.body.type === PhysicsBodyType.Dynamic) {
+          activeContactBodies.add(contact.a.body);
+        }
+        if (contact.b.body.type === PhysicsBodyType.Dynamic) {
+          activeContactBodies.add(contact.b.body);
+        }
+      }
+    }
+    this.updateSleeping(deltaTime, entries, activeContactBodies);
 
     this.stepStats = {
       colliders: entries.length,
@@ -180,7 +248,6 @@ export class PhysicsSystem implements System {
   private integrate(dt: number, entries: BodyEntry[]): void {
     for (const entry of entries) {
       const body = entry.body;
-      const transform = entry.transform.transform;
 
       if (body.type === PhysicsBodyType.Static || this.isCurveForcedStatic(entry)) {
         continue;
@@ -188,8 +255,7 @@ export class PhysicsSystem implements System {
 
       if (body.type === PhysicsBodyType.Kinematic) {
         const v = body.getVelocity();
-        transform.position.x += v.x * dt;
-        transform.position.y += v.y * dt;
+        entry.transform.translateWorld(v.x * dt, v.y * dt);
         continue;
       }
 
@@ -203,10 +269,9 @@ export class PhysicsSystem implements System {
       const damping = Math.max(0, 1 - body.linearDamping * dt);
       velocity = velocity.multiply(damping);
 
-      body.setVelocity(velocity);
+      body.setVelocity(velocity, false);
 
-      transform.position.x += velocity.x * dt;
-      transform.position.y += velocity.y * dt;
+      entry.transform.translateWorld(velocity.x * dt, velocity.y * dt);
     }
   }
 
@@ -232,8 +297,8 @@ export class PhysicsSystem implements System {
     const impulseScalar = (-(1 + restitution) * velAlongNormal) / invMassSum;
     const impulse = contact.normal.multiply(impulseScalar);
 
-    if (invMassA > 0) bodyA.applyImpulse(impulse.negate());
-    if (invMassB > 0) bodyB.applyImpulse(impulse);
+    if (invMassA > 0) bodyA.applyImpulse(impulse.negate(), false);
+    if (invMassB > 0) bodyB.applyImpulse(impulse, false);
 
     const nextVA = bodyA.getVelocity();
     const nextVB = bodyB.getVelocity();
@@ -249,11 +314,13 @@ export class PhysicsSystem implements System {
     const clampedJt = Math.max(-maxFriction, Math.min(jt, maxFriction));
     const frictionImpulse = tangent.multiply(clampedJt);
 
-    if (invMassA > 0) bodyA.applyImpulse(frictionImpulse.negate());
-    if (invMassB > 0) bodyB.applyImpulse(frictionImpulse);
+    if (invMassA > 0) bodyA.applyImpulse(frictionImpulse.negate(), false);
+    if (invMassB > 0) bodyB.applyImpulse(frictionImpulse, false);
   }
 
   private solvePosition(contact: Contact): void {
+    if (!this.refreshContact(contact)) return;
+
     const invMassA = this.effectiveInvMass(contact.a);
     const invMassB = this.effectiveInvMass(contact.b);
     const invMassSum = invMassA + invMassB;
@@ -269,28 +336,97 @@ export class PhysicsSystem implements System {
     const correction = contact.normal.multiply(correctionMagnitude);
 
     if (invMassA > 0) {
-      contact.a.transform.transform.position.x -= correction.x * invMassA;
-      contact.a.transform.transform.position.y -= correction.y * invMassA;
+      contact.a.transform.translateWorld(-correction.x * invMassA, -correction.y * invMassA);
     }
 
     if (invMassB > 0) {
-      contact.b.transform.transform.position.x += correction.x * invMassB;
-      contact.b.transform.transform.position.y += correction.y * invMassB;
+      contact.b.transform.translateWorld(correction.x * invMassB, correction.y * invMassB);
     }
+  }
+
+  private refreshContact(contact: Contact): boolean {
+    const mtv = contact.a.collider.getCollisionNormal(contact.b.collider);
+    if (!mtv || mtv.magnitude <= EPS) return false;
+    this.configureContactGeometry(contact, mtv, false);
+    return true;
+  }
+
+  private configureContactGeometry(
+    contact: Contact,
+    mtv: Vector2D,
+    detectCoincidence: boolean,
+  ): void {
+    let penetration = mtv.magnitude;
+    // Shape MTV moves A out of B; the impulse solver uses a normal from A to B.
+    let normal = mtv.multiply(-1 / penetration);
+    if (contact.coincidentNormal) {
+      contact.normal = contact.coincidentNormal;
+      contact.penetration = penetration;
+      return;
+    }
+    if (!detectCoincidence) {
+      contact.normal = normal;
+      contact.penetration = penetration;
+      return;
+    }
+
+    const boundsA = contact.a.collider.bbox();
+    const boundsB = contact.b.collider.bbox();
+    const centerDx = boundsB.x + boundsB.width / 2 - (boundsA.x + boundsA.width / 2);
+    const centerDy = boundsB.y + boundsB.height / 2 - (boundsA.y + boundsA.height / 2);
+
+    if (Math.abs(centerDx) <= EPS && Math.abs(centerDy) <= EPS) {
+      const relativeVelocity = contact.b.body.getVelocity().subtract(contact.a.body.getVelocity());
+      const moving = relativeVelocity.magnitude > EPS;
+      const useX = moving
+        ? Math.abs(relativeVelocity.x) >= Math.abs(relativeVelocity.y)
+        : Math.abs(normal.x) >= Math.abs(normal.y);
+      const relativeAxisVelocity = useX ? relativeVelocity.x : relativeVelocity.y;
+      let sign: number;
+
+      if (moving && Math.abs(relativeAxisVelocity) > EPS) {
+        sign = relativeAxisVelocity > 0 ? -1 : 1;
+      } else {
+        const mobilityA = this.mobilityRank(contact.a.body);
+        const mobilityB = this.mobilityRank(contact.b.body);
+        sign = mobilityA === mobilityB ? 1 : mobilityA > mobilityB ? 1 : -1;
+      }
+      contact.coincidentNormal = useX ? new Vector2D(sign, 0) : new Vector2D(0, sign);
+
+      normal = contact.coincidentNormal;
+      penetration =
+        normal.x !== 0
+          ? Math.min(boundsA.x + boundsA.width, boundsB.x + boundsB.width) -
+            Math.max(boundsA.x, boundsB.x)
+          : Math.min(boundsA.y + boundsA.height, boundsB.y + boundsB.height) -
+            Math.max(boundsA.y, boundsB.y);
+    }
+
+    contact.normal = normal;
+    contact.penetration = penetration;
+  }
+
+  private mobilityRank(body: PhysicsBodyComponent): number {
+    if (body.type === PhysicsBodyType.Dynamic) return 2;
+    if (body.type === PhysicsBodyType.Kinematic) return 1;
+    return 0;
+  }
+
+  private hasMeaningfulPenetration(penetration: number): boolean {
+    return penetration > Math.max(this.penetrationSlop * 3, this.penetrationSlop + EPS);
   }
 
   private updateSleeping(
     dt: number,
     entries: BodyEntry[],
-    touchedDynamicBodies: Set<PhysicsBodyComponent>,
+    activeContactBodies: Set<PhysicsBodyComponent>,
   ): void {
     for (const entry of entries) {
       const body = entry.body;
       if (!body.canSleep || body.type !== PhysicsBodyType.Dynamic) continue;
 
       const speed = body.getVelocity().magnitude;
-      const touched = touchedDynamicBodies.has(body);
-      if (speed <= this.sleepLinearThreshold && !touched) {
+      if (speed <= this.sleepLinearThreshold && !activeContactBodies.has(body)) {
         body.accumulateSleepTime(dt);
         if (body.sleepTime >= this.sleepTimeThreshold) {
           body.sleep();

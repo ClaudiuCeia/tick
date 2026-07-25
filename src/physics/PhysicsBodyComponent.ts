@@ -4,6 +4,19 @@ import { PhysicsBodyType } from "./PhysicsBodyType.ts";
 import type { PhysicsBodyOptions } from "./types.ts";
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+const requireFinite = (value: number, name: string): number => {
+  if (!Number.isFinite(value)) throw new Error(`${name} must be finite`);
+  return value;
+};
+const requirePositiveFinite = (value: number, name: string): number => {
+  requireFinite(value, name);
+  if (value <= 0) throw new Error(`${name} must be > 0`);
+  return value;
+};
+const requireFiniteVector = (value: Vector2D, name: string): void => {
+  requireFinite(value.x, `${name}.x`);
+  requireFinite(value.y, `${name}.y`);
+};
 
 export class PhysicsBodyComponent extends Component {
   private _type: PhysicsBodyType;
@@ -22,11 +35,11 @@ export class PhysicsBodyComponent extends Component {
   constructor(options: PhysicsBodyOptions = {}) {
     super();
     this._type = options.type ?? PhysicsBodyType.Dynamic;
-    this._mass = Math.max(0.0001, options.mass ?? 1);
-    this._restitution = clamp01(options.restitution ?? 0);
-    this._friction = clamp01(options.friction ?? 0.2);
-    this._gravityScale = Math.max(0, options.gravityScale ?? 1);
-    this._linearDamping = Math.max(0, options.linearDamping ?? 0);
+    this._mass = requirePositiveFinite(options.mass ?? 1, "Physics body mass");
+    this._restitution = clamp01(requireFinite(options.restitution ?? 0, "Restitution"));
+    this._friction = clamp01(requireFinite(options.friction ?? 0.2, "Friction"));
+    this._gravityScale = Math.max(0, requireFinite(options.gravityScale ?? 1, "Gravity scale"));
+    this._linearDamping = Math.max(0, requireFinite(options.linearDamping ?? 0, "Linear damping"));
     this._canSleep = options.canSleep ?? this._type === PhysicsBodyType.Dynamic;
 
     if (this._type !== PhysicsBodyType.Dynamic) {
@@ -54,7 +67,7 @@ export class PhysicsBodyComponent extends Component {
   }
 
   public setMass(mass: number): this {
-    this._mass = Math.max(0.0001, mass);
+    this._mass = requirePositiveFinite(mass, "Physics body mass");
     return this;
   }
 
@@ -67,7 +80,7 @@ export class PhysicsBodyComponent extends Component {
   }
 
   public setRestitution(value: number): this {
-    this._restitution = clamp01(value);
+    this._restitution = clamp01(requireFinite(value, "Restitution"));
     return this;
   }
 
@@ -76,7 +89,7 @@ export class PhysicsBodyComponent extends Component {
   }
 
   public setFriction(value: number): this {
-    this._friction = clamp01(value);
+    this._friction = clamp01(requireFinite(value, "Friction"));
     return this;
   }
 
@@ -85,7 +98,7 @@ export class PhysicsBodyComponent extends Component {
   }
 
   public setGravityScale(value: number): this {
-    this._gravityScale = Math.max(0, value);
+    this._gravityScale = Math.max(0, requireFinite(value, "Gravity scale"));
     return this;
   }
 
@@ -94,7 +107,7 @@ export class PhysicsBodyComponent extends Component {
   }
 
   public setLinearDamping(value: number): this {
-    this._linearDamping = Math.max(0, value);
+    this._linearDamping = Math.max(0, requireFinite(value, "Linear damping"));
     return this;
   }
 
@@ -116,12 +129,13 @@ export class PhysicsBodyComponent extends Component {
   }
 
   public getVelocity(): Vector2D {
-    return this._velocity;
+    return this._velocity.clone();
   }
 
-  public setVelocity(v: Vector2D): this {
+  public setVelocity(v: Vector2D, wake = true): this {
+    requireFiniteVector(v, "Velocity");
     this._velocity = v.clone();
-    if (this._type === PhysicsBodyType.Dynamic && v.magnitude > 0) {
+    if (wake && this._type === PhysicsBodyType.Dynamic && v.magnitude > 0) {
       this.wake();
     }
     return this;
@@ -129,6 +143,7 @@ export class PhysicsBodyComponent extends Component {
 
   public addForce(force: Vector2D): this {
     if (this._type !== PhysicsBodyType.Dynamic) return this;
+    requireFiniteVector(force, "Force");
     this._forces = this._forces.add(force);
     if (force.magnitude > 0) {
       this.wake();
@@ -142,10 +157,11 @@ export class PhysicsBodyComponent extends Component {
     return current;
   }
 
-  public applyImpulse(impulse: Vector2D): this {
+  public applyImpulse(impulse: Vector2D, wake = true): this {
     if (this._type !== PhysicsBodyType.Dynamic) return this;
+    requireFiniteVector(impulse, "Impulse");
     this._velocity = this._velocity.add(impulse.multiply(this.invMass));
-    if (impulse.magnitude > 0) {
+    if (wake && impulse.magnitude > 0) {
       this.wake();
     }
     return this;
@@ -166,6 +182,7 @@ export class PhysicsBodyComponent extends Component {
   }
 
   public accumulateSleepTime(dt: number): void {
+    if (!Number.isFinite(dt) || dt < 0) throw new Error("Sleep delta time must be finite and >= 0");
     this._sleepTime += dt;
   }
 

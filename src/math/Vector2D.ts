@@ -26,13 +26,23 @@ export class Vector2D {
   }
 
   get magnitude(): number {
-    return Math.sqrt(this.x ** 2 + this.y ** 2);
+    return Math.hypot(this.x, this.y);
   }
 
+  /**
+   * Returns the angle in radians pointing from this vector's position toward `v`.
+   * This target-minus-source behavior is the intentional 0.2.0 correction.
+   */
   angleTo(v: Vector2D): number {
-    const dx = this.x - v.x;
-    const dy = this.y - v.y;
-    return Math.atan2(dy, dx);
+    return Math.atan2(v.y - this.y, v.x - this.x);
+  }
+
+  /**
+   * Returns the legacy reverse angle, pointing from `v` toward this vector's position.
+   * @deprecated Prefer `v.angleTo(this)` so the direction is explicit at the call site.
+   */
+  angleFrom(v: Vector2D): number {
+    return Math.atan2(this.y - v.y, this.x - v.x);
   }
 
   normalize(): Vector2D {
@@ -57,7 +67,7 @@ export class Vector2D {
   }
 
   negate(): Vector2D {
-    return new Vector2D(-this.x, -this.y);
+    return new Vector2D(this.x === 0 ? 0 : -this.x, this.y === 0 ? 0 : -this.y);
   }
 
   clone(): Vector2D {
@@ -69,7 +79,7 @@ export class Vector2D {
   }
 
   distanceTo(v: Vector2D): number {
-    return Math.sqrt((this.x - v.x) ** 2 + (this.y - v.y) ** 2);
+    return Math.hypot(this.x - v.x, this.y - v.y);
   }
 
   public set(x: number, y: number): void {
