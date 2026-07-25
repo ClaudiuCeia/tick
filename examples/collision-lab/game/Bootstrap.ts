@@ -5,10 +5,10 @@ import {
   SystemTickMode,
   Vector2D,
   World,
+  WorldLoop,
   type ICanvas,
 } from "./lib.ts";
 import { CollisionLabScene } from "./scenes/CollisionLabScene.ts";
-import { WorldLoop } from "../../shared/WorldLoop.ts";
 
 const LAYERS = [1, 2, 4, 8];
 

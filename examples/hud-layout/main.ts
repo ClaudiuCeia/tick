@@ -14,11 +14,11 @@ import {
   SystemTickMode,
   Vector2D,
   World,
+  WorldLoop,
   type ICamera,
   type ICanvas,
   type UiRect,
 } from "../../index.ts";
-import { WorldLoop } from "../shared/WorldLoop.ts";
 
 const DESIGN_SIZE = new Vector2D(1920, 1080);
 

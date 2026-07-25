@@ -13,10 +13,10 @@ import {
   SystemTickMode,
   Vector2D,
   World,
+  WorldLoop,
   type ICamera,
   type ICanvas,
 } from "../../index.ts";
-import { WorldLoop } from "../shared/WorldLoop.ts";
 
 class CameraEntity extends Entity implements ICamera {
   public toCanvas(worldPos: Vector2D): Vector2D {

@@ -17,6 +17,7 @@ export {
   TransformComponent,
   Vector2D,
   World,
+  WorldLoop,
   type CollisionPair,
   type ICamera,
   type ICanvas,

@@ -6,10 +6,10 @@ import {
   SystemTickMode,
   Vector2D,
   World,
+  WorldLoop,
   type ICanvas,
 } from "./lib.ts";
 import { ArenaScene } from "./scenes/ArenaScene.ts";
-import { WorldLoop } from "../../shared/WorldLoop.ts";
 
 const createCanvas = (): HTMLCanvasElement => {
   const canvas = document.createElement("canvas");

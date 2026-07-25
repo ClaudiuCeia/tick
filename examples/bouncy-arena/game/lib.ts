@@ -19,6 +19,7 @@ export {
   TransformComponent,
   Vector2D,
   World,
+  WorldLoop,
   type ICamera,
   type ICanvas,
 } from "../../../index.ts";

@@ -6,11 +6,11 @@ import {
   SystemTickMode,
   Vector2D,
   World,
+  WorldLoop,
   type ICanvas,
 } from "./lib.ts";
 import { loadRunnerAssets } from "./assets.ts";
 import { RunnerScene } from "./scenes/RunnerScene.ts";
-import { WorldLoop } from "../../shared/WorldLoop.ts";
 
 const DISPLAY_WIDTH = 1024;
 const DISPLAY_HEIGHT = 576;

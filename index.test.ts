@@ -16,6 +16,8 @@ import type {
   SpriteAlignX,
   SpriteAlignY,
   SpriteRenderOptions,
+  FrameScheduler,
+  WorldLoopOptions,
   WorldOptions,
 } from "./index.ts";
 import type {
@@ -33,6 +35,8 @@ import type {
   SpriteAlignX as SrcSpriteAlignX,
   SpriteAlignY as SrcSpriteAlignY,
   SpriteRenderOptions as SrcSpriteRenderOptions,
+  FrameScheduler as SrcFrameScheduler,
+  WorldLoopOptions as SrcWorldLoopOptions,
   WorldOptions as SrcWorldOptions,
 } from "./src/index.ts";
 
@@ -50,6 +54,8 @@ type PublicTypeContract = [
   Assert<Equal<Snapshot, SrcSnapshot>>,
   Assert<Equal<LoadResult, SrcLoadResult>>,
   Assert<Equal<WorldOptions, SrcWorldOptions>>,
+  Assert<Equal<WorldLoopOptions, SrcWorldLoopOptions>>,
+  Assert<Equal<FrameScheduler, SrcFrameScheduler>>,
   Assert<Equal<PhysicsSystemOptions, SrcPhysicsSystemOptions>>,
   Assert<Equal<ICamera, SrcICamera>>,
   Assert<Equal<ICanvas, SrcICanvas>>,
@@ -83,6 +89,7 @@ describe("public exports", () => {
     expect(rootApi.SceneManager).toBe(srcApi.SceneManager);
     expect(rootApi.InputManager).toBe(srcApi.InputManager);
     expect(rootApi.World).toBe(srcApi.World);
+    expect(rootApi.WorldLoop).toBe(srcApi.WorldLoop);
     expect(rootApi.PhysicsSystem).toBe(srcApi.PhysicsSystem);
     expect(rootApi.PhysicsBodyComponent).toBe(srcApi.PhysicsBodyComponent);
     expect(rootApi.AssetManager).toBe(srcApi.AssetManager);
@@ -101,6 +108,7 @@ describe("public exports", () => {
     expect(typeof rootApi.Vector2D).toBe("function");
     expect(typeof rootApi.noise1D).toBe("function");
     expect(typeof rootApi.World).toBe("function");
+    expect(typeof rootApi.WorldLoop).toBe("function");
     expect(typeof rootApi.PhysicsSystem).toBe("function");
     expect(typeof rootApi.PhysicsBodyComponent).toBe("function");
     expect(typeof rootApi.AssetManager).toBe("function");

@@ -1,5 +1,12 @@
-import { Component, EcsRuntime, Entity, SystemPhase, SystemTickMode, World } from "../../index.ts";
-import { WorldLoop } from "../shared/WorldLoop.ts";
+import {
+  Component,
+  EcsRuntime,
+  Entity,
+  SystemPhase,
+  SystemTickMode,
+  World,
+  WorldLoop,
+} from "../../index.ts";
 
 const GRID_SIZE = 40;
 const STORAGE_KEY = "tick:pixel-painter:v1";
