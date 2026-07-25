@@ -15,10 +15,7 @@ export class Atom<T> {
 
   public get(): T {
     if (this.store && this.key) {
-      const value = this.store.getAtomValue<T>(this.key);
-      if (value !== undefined) {
-        return value;
-      }
+      if (this.store.hasAtom(this.key)) return this.store.getAtomValue<T>(this.key) as T;
     }
     return this.value;
   }
@@ -39,6 +36,9 @@ export class Atom<T> {
   }
 
   public _unbind(): void {
+    if (this.store && this.key && this.store.hasAtom(this.key)) {
+      this.value = this.store.getAtomValue<T>(this.key) as T;
+    }
     this.store = null;
     this.key = null;
     this.bound = false;

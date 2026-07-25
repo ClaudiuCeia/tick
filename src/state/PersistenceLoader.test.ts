@@ -28,6 +28,37 @@ class EntityWithHealth extends Entity {
   }
 }
 
+class EmptyHealthEntity extends Entity {
+  public static type = "empty-health";
+}
+
+class MarkerComponent extends Component {
+  public static type = "marker";
+}
+
+class MixedComponent extends Component {
+  public static type = "mixed";
+  count = this.atom("count", 0);
+  target = this.ref<Entity | null>("target", null);
+}
+
+class EntityWithMixed extends Entity {
+  public static type = "with-mixed";
+
+  public constructor() {
+    super();
+    this.addComponent(new MixedComponent());
+  }
+}
+
+class WrongEntity extends Entity {
+  public static type = "wrong";
+}
+
+class AwakeEntity extends Entity {
+  public static type = "awake";
+}
+
 function createRuntimeAndRegistry(): {
   runtime: EcsRuntime;
   registry: PersistenceRegistry;
@@ -215,5 +246,245 @@ describe("PersistenceLoader", () => {
     );
 
     expect(result).toEqual({ ok: true, errors: [] });
+  });
+
+  test("reconstructs a persisted component through its component factory", () => {
+    const { runtime, registry, loader } = createRuntimeAndRegistry();
+    registry.registerEntity(EmptyHealthEntity, () => new EmptyHealthEntity());
+    registry.registerComponent(HealthComponent, () => new HealthComponent());
+
+    const result = loader.loadIntoRuntime(
+      {
+        version: 1,
+        rootSid: "e1",
+        entities: [{ sid: "e1", type: "empty-health", parentSid: null }],
+        atoms: { "e1:health:hp": 27 },
+      },
+      runtime,
+    );
+
+    expect(result).toEqual({ ok: true, errors: [] });
+    const entity = runtime.registry.getEntitiesByType(EmptyHealthEntity)[0]!;
+    expect(entity.getComponent(HealthComponent).hp.get()).toBe(27);
+  });
+
+  test("strict mode rejects atom source components that cannot be reconstructed", () => {
+    const permissive = createRuntimeAndRegistry();
+    permissive.registry.registerEntity(RootEntity, () => new RootEntity());
+    const snapshot: Snapshot = {
+      version: 1,
+      rootSid: "e1",
+      entities: [{ sid: "e1", type: "root", parentSid: null }],
+      atoms: { "e1:missing:value": 1 },
+    };
+
+    expect(permissive.loader.loadIntoRuntime(snapshot, permissive.runtime)).toEqual({
+      ok: true,
+      errors: [],
+    });
+
+    const strict = createRuntimeAndRegistry();
+    strict.registry.registerEntity(RootEntity, () => new RootEntity());
+    const result = strict.loader.loadIntoRuntime(snapshot, strict.runtime, { strict: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors[0]?.code).toBe("unknown_type");
+  });
+
+  test("rejects a graph whose rootSid is missing or whose nodes form a forest", () => {
+    const missingRoot = createRuntimeAndRegistry();
+    missingRoot.registry.registerEntity(RootEntity, () => new RootEntity());
+    expect(
+      missingRoot.loader.loadIntoRuntime(
+        {
+          version: 1,
+          rootSid: "missing",
+          entities: [{ sid: "e1", type: "root", parentSid: null }],
+          atoms: {},
+        },
+        missingRoot.runtime,
+      ).ok,
+    ).toBe(false);
+
+    const forest = createRuntimeAndRegistry();
+    forest.registry.registerEntity(RootEntity, () => new RootEntity());
+    forest.registry.registerEntity(ChildEntity, () => new ChildEntity());
+    const result = forest.loader.loadIntoRuntime(
+      {
+        version: 1,
+        rootSid: "e1",
+        entities: [
+          { sid: "e1", type: "root", parentSid: null },
+          { sid: "e2", type: "child", parentSid: null },
+        ],
+        atoms: {},
+      },
+      forest.runtime,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("reconstructs stateless components declared by the entity node", () => {
+    const { runtime, registry, loader } = createRuntimeAndRegistry();
+    registry.registerEntity(EmptyHealthEntity, () => new EmptyHealthEntity());
+    let componentRuntime: EcsRuntime | null = null;
+    registry.registerComponent(MarkerComponent, () => {
+      componentRuntime = EcsRuntime.getCurrent();
+      return new MarkerComponent();
+    });
+
+    const result = loader.loadIntoRuntime(
+      {
+        version: 1,
+        rootSid: "e1",
+        entities: [
+          {
+            sid: "e1",
+            type: "empty-health",
+            parentSid: null,
+            components: ["marker"],
+          },
+        ],
+        atoms: {},
+      },
+      runtime,
+    );
+
+    expect(result).toEqual({ ok: true, errors: [] });
+    expect(
+      runtime.registry.getEntitiesByType(EmptyHealthEntity)[0]!.getComponent(MarkerComponent),
+    ).toBeInstanceOf(MarkerComponent);
+    expect(componentRuntime).not.toBe(runtime);
+  });
+
+  test("strict mode rejects typo atom names and handle kind mismatches", () => {
+    const typo = createRuntimeAndRegistry();
+    typo.registry.registerEntity(EntityWithMixed, () => new EntityWithMixed());
+    const typoResult = typo.loader.loadIntoRuntime(
+      {
+        version: 1,
+        rootSid: "e1",
+        entities: [{ sid: "e1", type: "with-mixed", parentSid: null }],
+        atoms: { "e1:mixed:coutn": 1 },
+      },
+      typo.runtime,
+      { strict: true },
+    );
+    expect(typoResult.ok).toBe(false);
+    if (!typoResult.ok) expect(typoResult.errors[0]?.message).toContain("Unknown atom");
+
+    const wrongKind = createRuntimeAndRegistry();
+    wrongKind.registry.registerEntity(EntityWithMixed, () => new EntityWithMixed());
+    const kindResult = wrongKind.loader.loadIntoRuntime(
+      {
+        version: 1,
+        rootSid: "e1",
+        entities: [{ sid: "e1", type: "with-mixed", parentSid: null }],
+        atoms: { "e1:mixed:target": 123 },
+      },
+      wrongKind.runtime,
+      { strict: true },
+    );
+    expect(kindResult.ok).toBe(false);
+    if (!kindResult.ok)
+      expect(kindResult.errors[0]?.message).toContain("wrong persisted value kind");
+
+    const scalarToken = createRuntimeAndRegistry();
+    scalarToken.registry.registerEntity(EntityWithMixed, () => new EntityWithMixed());
+    const scalarResult = scalarToken.loader.loadIntoRuntime(
+      {
+        version: 1,
+        rootSid: "e1",
+        entities: [{ sid: "e1", type: "with-mixed", parentSid: null }],
+        atoms: { "e1:mixed:count": { $ref: { kind: "entity", sid: "e1" } } },
+      },
+      scalarToken.runtime,
+      { strict: true },
+    );
+    expect(scalarResult.ok).toBe(false);
+    if (!scalarResult.ok) {
+      expect(scalarResult.errors[0]?.message).toContain("wrong persisted value kind");
+    }
+  });
+
+  test("rejects entity and component factories with mismatched persisted types", () => {
+    const wrongEntity = createRuntimeAndRegistry();
+    wrongEntity.registry.registerEntity("root", () => new WrongEntity());
+    const entityResult = wrongEntity.loader.loadIntoRuntime(
+      {
+        version: 1,
+        rootSid: "e1",
+        entities: [{ sid: "e1", type: "root", parentSid: null }],
+        atoms: {},
+      },
+      wrongEntity.runtime,
+    );
+    expect(entityResult.ok).toBe(false);
+    if (!entityResult.ok)
+      expect(entityResult.errors[0]?.message).toContain("returned persisted type");
+
+    const wrongComponent = createRuntimeAndRegistry();
+    wrongComponent.registry.registerEntity(EmptyHealthEntity, () => new EmptyHealthEntity());
+    wrongComponent.registry.registerComponent("marker", () => new HealthComponent());
+    const componentResult = wrongComponent.loader.loadIntoRuntime(
+      {
+        version: 1,
+        rootSid: "e1",
+        entities: [
+          {
+            sid: "e1",
+            type: "empty-health",
+            parentSid: null,
+            components: ["marker"],
+          },
+        ],
+        atoms: {},
+      },
+      wrongComponent.runtime,
+    );
+    expect(componentResult.ok).toBe(false);
+    if (!componentResult.ok) {
+      expect(componentResult.errors[0]?.message).toContain("returned persisted type");
+    }
+  });
+
+  test("rejects separator characters in snapshot identifiers", () => {
+    const { runtime, registry, loader } = createRuntimeAndRegistry();
+    registry.registerEntity(RootEntity, () => new RootEntity());
+
+    const result = loader.loadIntoRuntime(
+      {
+        version: 1,
+        rootSid: "bad:sid",
+        entities: [{ sid: "bad:sid", type: "root", parentSid: null }],
+        atoms: {},
+      },
+      runtime,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors[0]?.code).toBe("invalid_payload");
+  });
+
+  test("rejects entity factories that awaken staged products", () => {
+    const { runtime, registry, loader } = createRuntimeAndRegistry();
+    registry.registerEntity(AwakeEntity, () => {
+      const entity = new AwakeEntity();
+      entity.awake();
+      return entity;
+    });
+
+    const result = loader.loadIntoRuntime(
+      {
+        version: 1,
+        rootSid: "e1",
+        entities: [{ sid: "e1", type: "awake", parentSid: null }],
+        atoms: {},
+      },
+      runtime,
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors[0]?.message).toContain("awake Entity");
+    expect(runtime.registry.count).toBe(0);
   });
 });

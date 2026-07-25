@@ -81,4 +81,11 @@ describe("PersistenceRegistry", () => {
     expect(registry.getEntityFactory("player")).toBeUndefined();
     expect(registry.getComponentFactory("health")).toBeUndefined();
   });
+
+  test("rejects persisted types containing the atom-key separator", () => {
+    const registry = new PersistenceRegistry();
+
+    expect(() => registry.registerEntity("bad:type", () => ({}))).toThrow("without ':'");
+    expect(() => registry.registerComponent("bad:type", () => ({}))).toThrow("without ':'");
+  });
 });

@@ -11,6 +11,18 @@ class StatsComponent extends Component {
   target = this.ref<{ id: string } | null>("target", null);
 }
 
+class DynamicComponent extends Component {
+  public static type = "dynamic";
+
+  public addAtom() {
+    return this.atom("late", 1);
+  }
+
+  public addRef() {
+    return this.ref<object | null>("late-ref", null);
+  }
+}
+
 describe("Component atom/ref declaration", () => {
   test("atom handles are usable before entity binding", () => {
     const component = new StatsComponent();
@@ -48,5 +60,26 @@ describe("Component atom/ref declaration", () => {
     component._unbindStoreHandles();
     expect(component.hp._isBound).toBe(false);
     expect(component.target._isBound).toBe(false);
+  });
+
+  test("rejects atom and ref declarations after attachment directly", () => {
+    const entity = new Node();
+    const component = new DynamicComponent();
+    entity.addComponent(component);
+
+    expect(() => component.addAtom()).toThrow(
+      "State handles must be created before component attachment.",
+    );
+    expect(() => component.addRef()).toThrow(
+      "State handles must be created before component attachment.",
+    );
+  });
+
+  test("rejects ambiguous and duplicate handle names", () => {
+    const component = new DynamicComponent();
+    component.addAtom();
+
+    expect(() => component.addAtom()).toThrow("Duplicate state handle name 'late'.");
+    expect(() => component.atom("bad:name", 1)).toThrow("without ':'");
   });
 });

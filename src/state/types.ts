@@ -6,6 +6,7 @@ export type SnapshotEntityNode = {
   sid: string;
   type: string;
   parentSid: string | null;
+  components?: string[];
   params?: Record<string, unknown>;
 };
 

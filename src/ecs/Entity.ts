@@ -1,5 +1,5 @@
 import type { IWithUpdate, IAwakable } from "./lifecycle.ts";
-import type { Component } from "./Component.ts";
+import { Component } from "./Component.ts";
 import { EntityRegistry } from "./EntityRegistry.ts";
 import { EcsRuntime } from "./EcsRuntime.ts";
 
@@ -9,43 +9,75 @@ type Constructor<T> = AbstractComponent<T> | { new (...args: unknown[]): T };
 export abstract class Entity implements IWithUpdate, IAwakable {
   private _componentMap: Map<Function, Component> = new Map();
   private _childMap: Map<Function, Entity[]> = new Map();
+  private _awakenedComponents = new Set<Component>();
 
   protected _components: Component[] = [];
   private _isAwake: boolean = false;
   private _parent: Entity | null = null;
   private _children: Entity[] = [];
   public readonly id: string = crypto.randomUUID();
-  private readonly _runtime: EcsRuntime;
+  private _runtime: EcsRuntime;
+  private _baseCleanupComplete = false;
+  private _adoptionPrepared = false;
 
   public _markForGc: boolean = false;
 
   constructor() {
     this._runtime = EcsRuntime.getCurrent();
-    this._runtime.registry.register(this);
+    this._runtime._registerEntity(this);
   }
 
   public awake(): void {
     if (this._isAwake) {
       return;
     }
+    if (this._markForGc) {
+      throw new Error(`Cannot awaken destroyed entity ${this.constructor.name}`);
+    }
+
+    const components = [...this._components];
+    const children = [...this._children];
     this._isAwake = true;
 
-    for (const component of this._components) {
-      component.awake();
-    }
-    for (const child of this._children) {
-      if (!child._isAwake) {
-        child.awake();
+    try {
+      for (const component of components) {
+        if (!this._isAwake) break;
+        if (
+          component.entity === this &&
+          this._components.includes(component) &&
+          !this._awakenedComponents.has(component)
+        ) {
+          component.awake();
+          if (component.entity === this && this._components.includes(component)) {
+            this._awakenedComponents.add(component);
+          }
+        }
       }
+      for (const child of children) {
+        if (!this._isAwake) break;
+        if (child._parent === this && !child._isAwake) {
+          child.awake();
+        }
+      }
+    } catch (error) {
+      this._isAwake = false;
+      throw error;
     }
   }
 
   public update(deltaTime: number): void {
-    for (const component of this._components) {
-      component.update(deltaTime);
+    const components = [...this._components];
+    const children = [...this._children];
+
+    for (const component of components) {
+      if (component.entity === this && this._components.includes(component)) {
+        component.update(deltaTime);
+      }
     }
-    for (const child of this._children) {
-      child.update(deltaTime);
+    for (const child of children) {
+      if (child._parent === this) {
+        child.update(deltaTime);
+      }
     }
   }
 
@@ -54,6 +86,15 @@ export abstract class Entity implements IWithUpdate, IAwakable {
   }
 
   public addComponent(component: Component): void {
+    if (this._markForGc) {
+      throw new Error(`Cannot add a component to destroyed entity ${this.constructor.name}`);
+    }
+    if (component.entity) {
+      throw new Error(
+        `Component ${component.constructor.name} is already attached to ${component.entity.constructor.name}`,
+      );
+    }
+
     if (this._components.length >= 100) {
       console.warn(
         `${this.constructor.name} has ${this._components.length} components, now adding ${component.constructor.name}`,
@@ -69,11 +110,43 @@ export abstract class Entity implements IWithUpdate, IAwakable {
     this._componentMap.set(component.constructor, component);
     this._components.push(component);
     component.entity = this;
-    component._bindStoreHandles();
+    try {
+      component._bindStoreHandles();
+    } catch (error) {
+      this._componentMap.delete(component.constructor);
+      const index = this._components.indexOf(component);
+      if (index !== -1) this._components.splice(index, 1);
+      component._unbindStoreHandles();
+      component.entity = undefined;
+      throw error;
+    }
     this._runtime.registry.markDirty();
 
     if (this._isAwake && component.awake) {
-      component.awake();
+      try {
+        component.awake();
+        if (component.entity === this && this._components.includes(component)) {
+          this._awakenedComponents.add(component);
+        }
+      } catch (error) {
+        const shouldCleanUp = component.entity === this;
+        this._componentMap.delete(component.constructor);
+        const index = this._components.indexOf(component);
+        if (index !== -1) this._components.splice(index, 1);
+        this._awakenedComponents.delete(component);
+        this._runtime.registry.markDirty();
+
+        if (shouldCleanUp) {
+          try {
+            component.destroy();
+          } catch {}
+          try {
+            component._unbindStoreHandles();
+          } catch {}
+          component.entity = undefined;
+        }
+        throw error;
+      }
     }
   }
 
@@ -86,25 +159,22 @@ export abstract class Entity implements IWithUpdate, IAwakable {
   }
 
   public removeComponent<C extends Component>(constr: Constructor<C>): void {
+    const component = this._componentMap.get(constr);
+    if (!component) return;
+
     this._componentMap.delete(constr);
-
-    let toRemove: Component | undefined;
-    let index: number | undefined;
-
-    for (let i = 0; i < this._components.length; i++) {
-      const component = this._components[i];
-      if (component instanceof (constr as any)) {
-        toRemove = component;
-        index = i;
-        break;
-      }
-    }
-
-    if (toRemove && index !== undefined) {
-      toRemove._unbindStoreHandles();
-      toRemove.entity = undefined;
+    this._awakenedComponents.delete(component);
+    const index = this._components.indexOf(component);
+    if (index !== -1) {
       this._components.splice(index, 1);
-      this._runtime.registry.markDirty();
+    }
+    this._runtime.registry.markDirty();
+
+    try {
+      component.destroy();
+    } finally {
+      component._unbindStoreHandles();
+      component.entity = undefined;
     }
   }
 
@@ -113,11 +183,27 @@ export abstract class Entity implements IWithUpdate, IAwakable {
   }
 
   public addChild(entity: Entity): void {
+    if (this._markForGc) {
+      throw new Error(`Cannot add a child to destroyed entity ${this.constructor.name}`);
+    }
+    if (entity._markForGc) {
+      throw new Error(`Cannot attach destroyed entity ${entity.constructor.name}`);
+    }
+
     if (entity.runtime !== this.runtime) {
       throw new Error(
         `Cannot parent ${entity.constructor.name} across runtimes. ` +
           `Parent runtime and child runtime must match.`,
       );
+    }
+
+    if (entity === this) {
+      throw new Error("Cannot create a cycle in the entity hierarchy");
+    }
+    for (let ancestor = this._parent; ancestor; ancestor = ancestor._parent) {
+      if (ancestor === entity) {
+        throw new Error("Cannot create a cycle in the entity hierarchy");
+      }
     }
 
     if (this._children.includes(entity)) {
@@ -132,7 +218,7 @@ export abstract class Entity implements IWithUpdate, IAwakable {
     }
 
     if (entity._parent) {
-      entity._parent.removeChild(entity);
+      entity._parent.detachChild(entity);
     }
 
     this._children.push(entity);
@@ -152,7 +238,7 @@ export abstract class Entity implements IWithUpdate, IAwakable {
   public removeChild(entityOrCb: Entity | ((child: Entity) => boolean)): void {
     let entity: Entity | null = null;
     if (typeof entityOrCb === "function") {
-      const entities = this._children.filter(entityOrCb);
+      const entities = [...this._children].filter(entityOrCb);
       if (entities.length > 0) {
         for (const child of entities) {
           this.removeChild(child);
@@ -167,25 +253,8 @@ export abstract class Entity implements IWithUpdate, IAwakable {
       return;
     }
 
-    const index = this._children.findIndex((e) => e.id === entity!.id);
-    if (index !== -1) {
-      this._children.splice(index, 1);
-      entity._parent = null;
-
-      const list = this._childMap.get(entity.constructor);
-      if (list) {
-        const i = list.indexOf(entity);
-        if (i !== -1) {
-          list.splice(i, 1);
-          if (list.length === 0) {
-            this._childMap.delete(entity.constructor);
-          }
-        }
-      }
-
-      if (entity._isAwake) {
-        entity.destroy();
-      }
+    if (this.detachChild(entity) && entity._isAwake) {
+      entity.destroy();
     }
   }
 
@@ -227,26 +296,122 @@ export abstract class Entity implements IWithUpdate, IAwakable {
   }
 
   public destroy(): void {
+    Entity.forceDestroy(this);
+  }
+
+  /** Explicit base lifecycle cleanup that bypasses subclass instance methods. */
+  public static forceDestroy(entity: Entity): void {
+    entity.#forceDestroy();
+  }
+
+  /** Explicit base preparation for no-fail persistence adoption. */
+  public static prepareRuntimeAdoption(entity: Entity): void {
+    entity.#prepareRuntimeAdoption();
+  }
+
+  /** Explicit base persistence transfer into a validated target runtime. */
+  public static adoptRuntime(entity: Entity, runtime: EcsRuntime): void {
+    entity.#adoptRuntime(runtime);
+  }
+
+  /** Explicit base state-handle rebind after the target store commit. */
+  public static rebindStoreHandles(entity: Entity): void {
+    entity.#rebindStoreHandles();
+  }
+
+  #forceDestroy(): void {
+    if (this._baseCleanupComplete) return;
+
+    const children = [...this._children];
+    const components = [...this._components];
+    let lifecycleError: unknown;
     this._markForGc = true;
     this._isAwake = false;
 
     if (this._parent) {
-      this._parent.removeChild(this);
+      this._parent.detachChild(this);
     }
 
-    this._runtime.registry.unregister(this);
-
-    while (this._children.length > 0) {
-      this._children[0]!.destroy();
+    try {
+      this._runtime.registry.unregister(this);
+    } catch (error) {
+      lifecycleError ??= error;
     }
+
     this._children.length = 0;
+    this._childMap.clear();
+    for (const child of children) {
+      if (child._parent === this) {
+        child._parent = null;
+      }
+    }
 
-    for (const component of this._components) {
-      component.destroy?.();
-      component._unbindStoreHandles();
+    for (const child of children) {
+      try {
+        child.destroy();
+      } catch (error) {
+        lifecycleError ??= error;
+      } finally {
+        try {
+          Entity.forceDestroy(child);
+        } catch (error) {
+          lifecycleError ??= error;
+        }
+      }
+    }
+
+    this._components.length = 0;
+    this._componentMap.clear();
+    this._awakenedComponents.clear();
+    for (const component of components) {
+      if (component.entity !== this) continue;
+      try {
+        component.destroy();
+      } catch (error) {
+        lifecycleError ??= error;
+      }
+      try {
+        component._unbindStoreHandles();
+      } catch (error) {
+        lifecycleError ??= error;
+      }
+      try {
+        Component.forceUnbindStoreHandles(component);
+      } catch (error) {
+        lifecycleError ??= error;
+      }
       component.entity = undefined;
     }
-    this._components = [];
+
+    this._baseCleanupComplete = true;
+
+    if (lifecycleError !== undefined) {
+      throw lifecycleError;
+    }
+  }
+
+  #prepareRuntimeAdoption(): void {
+    if (this._isAwake || this._markForGc || this._baseCleanupComplete) {
+      throw new Error(`Cannot adopt non-live entity ${this.constructor.name}`);
+    }
+    for (const component of this._components) Component.forceUnbindStoreHandles(component);
+    this._adoptionPrepared = true;
+  }
+
+  #adoptRuntime(runtime: EcsRuntime): void {
+    if (!this._adoptionPrepared) {
+      throw new Error(`Entity ${this.constructor.name} was not prepared for adoption`);
+    }
+    this._runtime.registry.unregister(this);
+    this._runtime = runtime;
+    runtime._registerEntity(this);
+    this._adoptionPrepared = false;
+  }
+
+  #rebindStoreHandles(): void {
+    for (const component of this._components) {
+      Component.bindStoreHandlesAfterAdoption(component);
+    }
   }
 
   public static getRegistry(): EntityRegistry {
@@ -269,5 +434,21 @@ export abstract class Entity implements IWithUpdate, IAwakable {
 
   public getOldestAncestor(): Entity {
     return this.getRoot();
+  }
+
+  private detachChild(entity: Entity): boolean {
+    const index = this._children.indexOf(entity);
+    if (index === -1) return false;
+
+    this._children.splice(index, 1);
+    entity._parent = null;
+
+    const list = this._childMap.get(entity.constructor);
+    if (list) {
+      const typeIndex = list.indexOf(entity);
+      if (typeIndex !== -1) list.splice(typeIndex, 1);
+      if (list.length === 0) this._childMap.delete(entity.constructor);
+    }
+    return true;
   }
 }

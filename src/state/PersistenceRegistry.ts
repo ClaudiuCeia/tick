@@ -1,5 +1,13 @@
-import { getPersistedType, type PersistableClass } from "./PersistedType.ts";
+import {
+  getPersistedType,
+  normalizePersistedType,
+  type PersistableClass,
+} from "./PersistedType.ts";
 
+/**
+ * Factories execute in a quarantined runtime and must not mutate externally captured objects.
+ * Closure side effects outside that runtime cannot be isolated or rolled back.
+ */
 export type PersistFactory<T = unknown> = (node: unknown) => T;
 
 export class PersistenceRegistry {
@@ -10,7 +18,9 @@ export class PersistenceRegistry {
   public registerEntity(klass: PersistableClass, factory: PersistFactory): void;
   public registerEntity(typeOrClass: string | PersistableClass, factory: PersistFactory): void {
     const type =
-      typeof typeOrClass === "string" ? typeOrClass : getPersistedType(typeOrClass, "entity");
+      typeof typeOrClass === "string"
+        ? normalizePersistedType(typeOrClass, "entity")
+        : getPersistedType(typeOrClass, "entity");
 
     if (this.entities.has(type)) {
       throw new Error(`Duplicate persisted entity type: ${type}`);
@@ -22,7 +32,9 @@ export class PersistenceRegistry {
   public registerComponent(klass: PersistableClass, factory: PersistFactory): void;
   public registerComponent(typeOrClass: string | PersistableClass, factory: PersistFactory): void {
     const type =
-      typeof typeOrClass === "string" ? typeOrClass : getPersistedType(typeOrClass, "component");
+      typeof typeOrClass === "string"
+        ? normalizePersistedType(typeOrClass, "component")
+        : getPersistedType(typeOrClass, "component");
 
     if (this.components.has(type)) {
       throw new Error(`Duplicate persisted component type: ${type}`);

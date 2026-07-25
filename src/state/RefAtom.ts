@@ -15,10 +15,7 @@ export class RefAtom<T extends object | null> {
 
   public get(): T {
     if (this.store && this.key) {
-      const value = this.store.getAtomValue<T>(this.key);
-      if (value !== undefined) {
-        return value;
-      }
+      if (this.store.hasAtom(this.key)) return this.store.getAtomValue<T>(this.key) as T;
     }
     return this.value;
   }
@@ -34,11 +31,14 @@ export class RefAtom<T extends object | null> {
   public _bind(store: StateStore, key: string, persist = true): void {
     this.store = store;
     this.key = key;
-    this.store.registerAtom(key, this.value, { persist });
+    this.store.registerAtom(key, this.value, { persist, ref: true });
     this.bound = true;
   }
 
   public _unbind(): void {
+    if (this.store && this.key && this.store.hasAtom(this.key)) {
+      this.value = this.store.getAtomValue<T>(this.key) as T;
+    }
     this.store = null;
     this.key = null;
     this.bound = false;

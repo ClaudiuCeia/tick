@@ -26,8 +26,28 @@ class CountingComponent extends Component {
 }
 
 class AltComponent extends Component {
+  updateCount = 0;
   override awake() {}
-  override update(_dt: number) {}
+  override update(_dt: number) {
+    this.updateCount++;
+  }
+}
+
+class RemovingComponent extends Component {
+  override update(): void {
+    this.ent.removeComponent(AltComponent);
+  }
+}
+
+class AddingChildComponent extends Component {
+  child: NodeA | null = null;
+
+  override update(): void {
+    if (this.child) return;
+    this.child = new NodeA();
+    this.child.addComponent(new CountingComponent());
+    this.ent.addChild(this.child);
+  }
 }
 
 class BindingComponent extends Component {
@@ -44,6 +64,38 @@ class BindingComponent extends Component {
   override _unbindStoreHandles(): void {
     super._unbindStoreHandles();
     this.unbindCount++;
+  }
+}
+
+class InvalidBindingComponent extends Component {
+  hp = this.atom("hp", 100);
+}
+
+class FlakyAwakeComponent extends Component {
+  awakeCount = 0;
+
+  override awake(): void {
+    this.awakeCount++;
+    if (this.awakeCount === 1) {
+      throw new Error("awake failed");
+    }
+  }
+}
+
+class FailingLazyComponent extends Component {
+  public static type = "failing-lazy";
+  awakeCount = 0;
+  destroyCount = 0;
+  hp = this.atom("hp", 100);
+
+  override awake(): void {
+    this.awakeCount++;
+    throw new Error("lazy awake failed");
+  }
+
+  override destroy(): void {
+    this.destroyCount++;
+    throw new Error("lazy destroy failed");
   }
 }
 
@@ -127,6 +179,50 @@ describe("Entity — awake lifecycle", () => {
     parent.addChild(child);
     expect(child.isAwake).toBe(true);
   });
+
+  test("awake retry resumes without rerunning successful component or child work", () => {
+    const parent = new NodeA();
+    const parentComponent = new CountingComponent();
+    const successfulChild = new NodeA();
+    const successfulChildComponent = new CountingComponent();
+    const flakyChild = new NodeA();
+    const successfulFlakyChildComponent = new CountingComponent();
+    const flakyComponent = new FlakyAwakeComponent();
+    parent.addComponent(parentComponent);
+    successfulChild.addComponent(successfulChildComponent);
+    flakyChild.addComponent(successfulFlakyChildComponent);
+    flakyChild.addComponent(flakyComponent);
+    parent.addChild(successfulChild);
+    parent.addChild(flakyChild);
+
+    expect(() => parent.awake()).toThrow("awake failed");
+    expect(parent.isAwake).toBe(false);
+    expect(flakyChild.isAwake).toBe(false);
+
+    parent.awake();
+
+    expect(parent.isAwake).toBe(true);
+    expect(flakyChild.isAwake).toBe(true);
+    expect(parentComponent.awakeCount).toBe(1);
+    expect(successfulChildComponent.awakeCount).toBe(1);
+    expect(successfulFlakyChildComponent.awakeCount).toBe(1);
+    expect(flakyComponent.awakeCount).toBe(2);
+  });
+
+  test("failed lazy component awake atomically rolls back attachment", () => {
+    const entity = new NodeA();
+    const component = new FailingLazyComponent();
+    entity.awake();
+
+    expect(() => entity.addComponent(component)).toThrow("lazy awake failed");
+
+    expect(component.awakeCount).toBe(1);
+    expect(component.destroyCount).toBe(1);
+    expect(component.entity).toBeUndefined();
+    expect(component.hp._isBound).toBe(false);
+    expect(entity.components).not.toContain(component);
+    expect(entity.hasComponent(FailingLazyComponent)).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -150,6 +246,20 @@ describe("Entity — update", () => {
     parent.awake();
     parent.update(1);
     expect(c.updateCount).toBe(1);
+  });
+
+  test("children added during component updates wait until the next update", () => {
+    const parent = new NodeA();
+    const adder = new AddingChildComponent();
+    parent.addComponent(adder);
+    parent.awake();
+
+    parent.update(1);
+    const childComponent = adder.child?.getComponent(CountingComponent);
+    expect(childComponent?.updateCount).toBe(0);
+
+    parent.update(1);
+    expect(childComponent?.updateCount).toBe(1);
   });
 });
 
@@ -221,6 +331,23 @@ describe("Entity — destroy", () => {
     expect(e.components).toHaveLength(0);
   });
 
+  test("destroy() is idempotent and clears component and child indexes", () => {
+    const e = new NodeA();
+    const child = new NodeB();
+    const component = new CountingComponent();
+    e.addComponent(component);
+    e.addChild(child);
+    e.awake();
+
+    e.destroy();
+    e.destroy();
+
+    expect(component.destroyCount).toBe(1);
+    expect(e.hasComponent(CountingComponent)).toBe(false);
+    expect(e.getChild(NodeB)).toBeNull();
+    expect(e.getChildren(NodeB)).toEqual([]);
+  });
+
   test("destroy() called directly removes entity from parent children list", () => {
     const parent = new NodeA();
     const child = new NodeA();
@@ -228,6 +355,17 @@ describe("Entity — destroy", () => {
     parent.awake();
     child.destroy();
     expect(parent.children).toHaveLength(0);
+  });
+
+  test("destroyed entities cannot be awakened or receive new attachments", () => {
+    const entity = new NodeA();
+    const child = new NodeB();
+    entity.destroy();
+
+    expect(() => entity.awake()).toThrow(/destroyed entity/i);
+    expect(() => entity.addComponent(new CountingComponent())).toThrow(/destroyed entity/i);
+    expect(() => entity.addChild(child)).toThrow(/destroyed entity/i);
+    expect(() => child.addChild(entity)).toThrow(/destroyed entity/i);
   });
 });
 
@@ -261,6 +399,17 @@ describe("Entity — components", () => {
     expect(() => e.addComponent(new CountingComponent())).toThrow();
   });
 
+  test("a component instance cannot be attached to multiple entities", () => {
+    const first = new NodeA();
+    const second = new NodeA();
+    const component = new CountingComponent();
+    first.addComponent(component);
+
+    expect(() => second.addComponent(component)).toThrow(/already attached/i);
+    expect(first.getComponent(CountingComponent)).toBe(component);
+    expect(second.hasComponent(CountingComponent)).toBe(false);
+  });
+
   test("addComponent sets component.entity", () => {
     const e = new NodeA();
     const c = new CountingComponent();
@@ -275,6 +424,17 @@ describe("Entity — components", () => {
 
     expect(c.bindCount).toBe(1);
     expect(c.hp._isBound).toBe(true);
+  });
+
+  test("failed store-handle binding rolls back component attachment", () => {
+    const e = new NodeA();
+    const c = new InvalidBindingComponent();
+
+    expect(() => e.addComponent(c)).toThrow(/Missing static type/);
+    expect(c.entity).toBeUndefined();
+    expect(c.hp._isBound).toBe(false);
+    expect(e.components).not.toContain(c);
+    expect(e.hasComponent(InvalidBindingComponent)).toBe(false);
   });
 
   test("removeComponent removes it from the entity", () => {
@@ -302,6 +462,30 @@ describe("Entity — components", () => {
 
     expect(c.unbindCount).toBe(1);
     expect(c.hp._isBound).toBe(false);
+  });
+
+  test("removeComponent destroys exactly once and clears both component indexes", () => {
+    const e = new NodeA();
+    const c = new CountingComponent();
+    e.addComponent(c);
+
+    e.removeComponent(CountingComponent);
+    e.removeComponent(CountingComponent);
+
+    expect(c.destroyCount).toBe(1);
+    expect(e.components).not.toContain(c);
+    expect(e.hasComponent(CountingComponent)).toBe(false);
+  });
+
+  test("component removal during update does not update the removed component", () => {
+    const e = new NodeA();
+    const removed = new AltComponent();
+    e.addComponent(new RemovingComponent());
+    e.addComponent(removed);
+
+    e.update(1);
+
+    expect(removed.updateCount).toBe(0);
   });
 
   test("can add different component types", () => {
@@ -355,6 +539,23 @@ describe("Entity — children", () => {
     expect(child.parent).toBe(p2);
     expect(p1.children).not.toContain(child);
     expect(p2.children).toContain(child);
+  });
+
+  test("re-parenting an awake child does not destroy it", () => {
+    const p1 = new NodeA();
+    const p2 = new NodeA();
+    const child = new NodeB();
+    const component = new CountingComponent();
+    child.addComponent(component);
+    p1.addChild(child);
+    p1.awake();
+    p2.awake();
+
+    p2.addChild(child);
+
+    expect(component.destroyCount).toBe(0);
+    expect(child.isAwake).toBe(true);
+    expect(EcsRuntime.getCurrent().registry.getEntityById(child.id)).toBe(child);
   });
 
   test("getChildById finds by id", () => {
@@ -446,6 +647,25 @@ describe("Entity — removeChild", () => {
 
 // ---------------------------------------------------------------------------
 describe("Entity — hierarchy", () => {
+  test("rejects self-parenting", () => {
+    const entity = new NodeA();
+    expect(() => entity.addChild(entity)).toThrow(/cycle/i);
+    expect(entity.parent).toBeNull();
+    expect(entity.children).toHaveLength(0);
+  });
+
+  test("rejects parenting an ancestor below its descendant", () => {
+    const root = new NodeA();
+    const child = new NodeA();
+    const leaf = new NodeB();
+    root.addChild(child);
+    child.addChild(leaf);
+
+    expect(() => leaf.addChild(root)).toThrow(/cycle/i);
+    expect(child.parent).toBe(root);
+    expect(leaf.parent).toBe(child);
+  });
+
   test("getRoot returns topmost ancestor", () => {
     const root = new NodeA();
     const mid = new NodeA();

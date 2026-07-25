@@ -1,6 +1,10 @@
 import type { Entity } from "./Entity.ts";
 import { EntityQuery, type EntityConstructor } from "./EntityQuery.ts";
 
+export type EntityRegistryOptions = {
+  captureCreationSites?: boolean;
+};
+
 /**
  * Registry that tracks active entities for a single ECS runtime.
  * Uses Maps internally for O(1) lookups by id and type.
@@ -14,16 +18,22 @@ export class EntityRegistry {
   private creationMap = new Map<string, string>();
   /** Monotonic version used by cached queries for change tracking */
   private _version = 0;
+  private readonly captureCreationSites: boolean;
+  private disposed = false;
 
-  public constructor() {}
+  public constructor(options: EntityRegistryOptions = {}) {
+    this.captureCreationSites = options.captureCreationSites ?? false;
+  }
 
   public register(entity: Entity): void {
-    // Record creation site for debugging orphan leaks
-    const stack = new Error().stack!.split("\n")[3]?.trim() ?? "";
-    this.creationMap.set(entity.id, stack);
-
+    if (this.disposed) throw new Error("Cannot register an entity in a disposed registry.");
     if (this.entities.has(entity.id)) {
       return; // already registered
+    }
+
+    if (this.captureCreationSites) {
+      const stack = new Error().stack?.split("\n")[3]?.trim() ?? "";
+      this.creationMap.set(entity.id, stack);
     }
 
     this.entities.set(entity.id, entity);
@@ -43,7 +53,9 @@ export class EntityRegistry {
   }
 
   public unregister(entity: Entity): void {
-    if (!this.entities.delete(entity.id)) {
+    const wasRegistered = this.entities.delete(entity.id);
+    this.creationMap.delete(entity.id);
+    if (!wasRegistered) {
       return;
     }
 
@@ -63,18 +75,10 @@ export class EntityRegistry {
   }
 
   public getEntitiesByType<T extends Entity>(type: new (...args: any[]) => T): T[] {
-    const set = this.typeCache.get(type);
-    if (set) {
-      return Array.from(set) as T[];
-    }
     return this.getAllEntities().filter((e) => e instanceof type) as T[];
   }
 
   public getFirstEntityByType<T extends Entity>(type: new (...args: any[]) => T): T | null {
-    const set = this.typeCache.get(type);
-    if (set && set.size > 0) {
-      return set.values().next().value as T;
-    }
     const found = this.getAllEntities().find((e) => e instanceof type);
     return found ? (found as T) : null;
   }
@@ -113,6 +117,12 @@ export class EntityRegistry {
     if (hadEntities) {
       this.markDirty();
     }
+  }
+
+  /** Internal runtime teardown hook. Disposed registries cannot be reused. */
+  public _dispose(): void {
+    this.clear();
+    this.disposed = true;
   }
 
   public dump(): void {

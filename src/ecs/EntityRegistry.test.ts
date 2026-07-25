@@ -1,9 +1,11 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { Entity } from "./Entity.ts";
 import { EcsRuntime } from "./EcsRuntime.ts";
+import { EntityRegistry } from "./EntityRegistry.ts";
 
 class Alpha extends Entity {}
 class Beta extends Entity {}
+class AlphaChild extends Alpha {}
 
 const registry = () => EcsRuntime.getCurrent().registry;
 
@@ -69,6 +71,14 @@ describe("EntityRegistry — queries", () => {
     expect(registry().getEntitiesByType(Alpha)).toHaveLength(0);
   });
 
+  test("type queries include subclasses even when exact instances exist", () => {
+    const exact = new Alpha();
+    const child = new AlphaChild();
+
+    expect(registry().getEntitiesByType(Alpha)).toEqual([exact, child]);
+    expect(registry().getFirstEntityByType(Alpha)).toBe(exact);
+  });
+
   test("getFirstEntityByType returns one entity", () => {
     new Alpha();
     new Alpha();
@@ -130,10 +140,19 @@ describe("EntityRegistry — type cache consistency", () => {
 });
 
 describe("EntityRegistry — creation site tracking", () => {
-  test("getCreationSite returns a string for registered entity", () => {
+  test("creation stack capture is disabled by default", () => {
     const e = new Alpha();
-    const site = registry().getCreationSite(e.id);
-    expect(typeof site).toBe("string");
+    expect(registry().getCreationSite(e.id)).toBeUndefined();
+  });
+
+  test("creation stack capture can be enabled and is cleared on unregister", () => {
+    const tracedRegistry = new EntityRegistry({ captureCreationSites: true });
+    const runtime = new EcsRuntime(tracedRegistry);
+    const e = EcsRuntime.runWith(runtime, () => new Alpha());
+
+    expect(typeof tracedRegistry.getCreationSite(e.id)).toBe("string");
+    tracedRegistry.unregister(e);
+    expect(tracedRegistry.getCreationSite(e.id)).toBeUndefined();
   });
 
   test("getCreationSite returns undefined for unknown id", () => {

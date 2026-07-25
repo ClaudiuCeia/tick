@@ -31,4 +31,18 @@ describe("RefAtom", () => {
     ref._unbind();
     expect(ref._isBound).toBe(false);
   });
+
+  test("retains the current reference when unbound", () => {
+    const first = { id: "t-1" };
+    const second = { id: "t-2" };
+    const ref = new RefAtom<{ id: string } | null>("target", null);
+    const store = new StateStore();
+    ref._bind(store, "e1:targeting:target");
+    ref.set(first);
+
+    ref._unbind();
+    store.setAtomValue("e1:targeting:target", second);
+
+    expect(ref.get()).toBe(first);
+  });
 });
