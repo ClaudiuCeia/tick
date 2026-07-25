@@ -43,6 +43,48 @@ describe("BroadcastEventBus — subscribe / publish", () => {
     expect(typeof id1).toBe("string");
     expect(id1).not.toBe(id2);
   });
+
+  test("listeners added during publish wait until the next publish", () => {
+    const bus = makeEventBus();
+    const calls: string[] = [];
+    bus.subscribe("ping", () => {
+      calls.push("existing");
+      bus.subscribe("ping", () => calls.push("added"));
+    });
+
+    bus.publish("ping", { value: 1 });
+    expect(calls).toEqual(["existing"]);
+  });
+
+  test("self-unsubscription does not skip the next listener", () => {
+    const bus = makeEventBus();
+    const calls: string[] = [];
+    let firstId = "";
+    firstId = bus.subscribe("ping", () => {
+      calls.push("first");
+      bus.unsubscribe(firstId);
+    });
+    bus.subscribe("ping", () => calls.push("second"));
+
+    bus.publish("ping", { value: 1 });
+    expect(calls).toEqual(["first", "second"]);
+  });
+
+  test("a listener unsubscribed before its turn is skipped", () => {
+    const bus = makeEventBus();
+    const calls: string[] = [];
+    let secondId = "";
+    bus.subscribe("ping", () => {
+      calls.push("first");
+      bus.unsubscribe(secondId);
+    });
+    secondId = bus.subscribe("ping", () => calls.push("second"));
+    bus.subscribe("ping", () => calls.push("third"));
+
+    bus.publish("ping", { value: 1 });
+
+    expect(calls).toEqual(["first", "third"]);
+  });
 });
 
 describe("BroadcastEventBus — unsubscribe", () => {

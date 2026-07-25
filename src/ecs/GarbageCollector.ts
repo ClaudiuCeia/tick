@@ -10,23 +10,13 @@ import { EcsRuntime } from "./EcsRuntime.ts";
  * destroy(), or when transient objects are created and discarded.
  */
 export class GarbageCollector {
-  static instance: GarbageCollector;
-
   private constructor(
     public root = "Game",
-    private registry: EntityRegistry = EcsRuntime.getCurrent().registry,
-  ) {
-    GarbageCollector.instance = this;
-  }
+    private registry?: EntityRegistry,
+  ) {}
 
   public static get(root?: string, registry?: EntityRegistry): GarbageCollector {
-    if (!this.instance) {
-      this.instance = new GarbageCollector(root, registry);
-    } else {
-      if (root !== undefined) this.instance.root = root;
-      if (registry) this.instance.registry = registry;
-    }
-    return this.instance;
+    return new GarbageCollector(root, registry);
   }
 
   public setRoot(root: string): void {
@@ -38,7 +28,7 @@ export class GarbageCollector {
   }
 
   public findOrphans(): Entity[] {
-    const all = this.registry.getAllEntities();
+    const all = this.getRegistry().getAllEntities();
     const root = all.find((e) => e.constructor.name === this.root);
     if (!root) return [];
 
@@ -63,5 +53,9 @@ export class GarbageCollector {
       orphan.destroy();
     }
     return orphans.length;
+  }
+
+  private getRegistry(): EntityRegistry {
+    return this.registry ?? EcsRuntime.getCurrent().registry;
   }
 }

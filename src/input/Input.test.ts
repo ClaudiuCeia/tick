@@ -137,6 +137,89 @@ describe("InputManager", () => {
     expect(input.getDragStartPos(0)).toBeNull();
   });
 
+  test("mouse button events use their own client coordinates", () => {
+    const handlers: HandlerMap = {};
+    const input = new InputManager();
+    input.init(makeTarget(handlers));
+
+    emit(handlers, "mousedown", { button: 0, clientX: 40, clientY: 50 });
+    expect(input.getMousePos().x).toBe(40);
+    expect(input.getMousePos().y).toBe(50);
+    expect(input.getDragStartPos(0)?.x).toBe(40);
+    expect(input.getDragStartPos(0)?.y).toBe(50);
+
+    emit(handlers, "mouseup", { button: 0, clientX: 60, clientY: 70 });
+    expect(input.getMousePos().x).toBe(60);
+    expect(input.getMousePos().y).toBe(70);
+  });
+
+  test("blur releases held keys and mouse buttons and ends dragging", () => {
+    const handlers: HandlerMap = {};
+    const input = new InputManager();
+    input.init(makeTarget(handlers));
+    emit(handlers, "keydown", { key: "a" });
+    emit(handlers, "mousedown", { button: 0, clientX: 1, clientY: 2 });
+    emit(handlers, "mousemove", { clientX: 2, clientY: 3, buttons: 1 });
+
+    emit(handlers, "blur", {});
+
+    expect(input.isDown("a")).toBe(false);
+    expect(input.isReleased("a")).toBe(true);
+    expect(input.isMouseDown(0)).toBe(false);
+    expect(input.isMouseReleased(0)).toBe(true);
+    expect(input.isDragging(0)).toBe(false);
+  });
+
+  test("mouseup on the owning window releases a button pressed on the target", () => {
+    const handlers: HandlerMap = {};
+    const outsideHandlers: HandlerMap = {};
+    const target = makeTarget(handlers) as EventTarget & {
+      ownerDocument: { defaultView: EventTarget };
+    };
+    target.ownerDocument = { defaultView: makeTarget(outsideHandlers) };
+    const input = new InputManager();
+    input.init(target);
+
+    emit(handlers, "mousedown", { button: 0, clientX: 4, clientY: 5 });
+    emit(outsideHandlers, "mouseup", { button: 0, clientX: 8, clientY: 9 });
+
+    expect(input.isMouseDown(0)).toBe(false);
+    expect(input.isMouseReleased(0)).toBe(true);
+    expect(input.getMousePos().x).toBe(8);
+    expect(input.getMousePos().y).toBe(9);
+  });
+
+  test("returned vectors cannot mutate internal input state", () => {
+    const handlers: HandlerMap = {};
+    const input = new InputManager();
+    input.init(makeTarget(handlers));
+    emit(handlers, "mousemove", { clientX: 10, clientY: 20, buttons: 0 });
+    emit(handlers, "mousedown", { button: 0, clientX: 10, clientY: 20 });
+
+    input.getMousePos().set(100, 200);
+    input.getMouseDelta().set(100, 200);
+    input.getDragStartPos(0)?.set(100, 200);
+
+    expect(input.getMousePos().x).toBe(10);
+    expect(input.getMousePos().y).toBe(20);
+    expect(input.getMouseDelta().x).toBe(10);
+    expect(input.getMouseDelta().y).toBe(20);
+    expect(input.getDragStartPos(0)?.x).toBe(10);
+    expect(input.getDragStartPos(0)?.y).toBe(20);
+  });
+
+  test("mousemove with no reported buttons repairs a missed outside mouseup", () => {
+    const handlers: HandlerMap = {};
+    const input = new InputManager();
+    input.init(makeTarget(handlers));
+    emit(handlers, "mousedown", { button: 0, clientX: 1, clientY: 1 });
+
+    emit(handlers, "mousemove", { clientX: 2, clientY: 2, buttons: 0 });
+
+    expect(input.isMouseDown(0)).toBe(false);
+    expect(input.isMouseReleased(0)).toBe(true);
+  });
+
   test("dispose removes listeners and clears state", () => {
     const handlers: HandlerMap = {};
     const input = new InputManager();

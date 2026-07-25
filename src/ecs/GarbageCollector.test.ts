@@ -8,8 +8,6 @@ class ChildNode extends Entity {}
 class OrphanNode extends Entity {}
 
 function makeGc(): GarbageCollector {
-  // Reset shared collector instance so each test starts fresh
-  (GarbageCollector as unknown as { instance: undefined }).instance = undefined;
   return GarbageCollector.get("GameRoot", EcsRuntime.getCurrent().registry);
 }
 
@@ -89,5 +87,30 @@ describe("GarbageCollector", () => {
     // With ChildNode as root, GameRoot is an orphan
     const orphans = gc.findOrphans();
     expect(orphans).toContain(root);
+  });
+
+  test("a collector without an explicit registry follows the current runtime", () => {
+    const gc = GarbageCollector.get("GameRoot");
+    const firstRoot = new GameRoot();
+    firstRoot.awake();
+    const firstOrphan = new OrphanNode();
+    expect(gc.findOrphans()).toContain(firstOrphan);
+
+    EcsRuntime.reset();
+    const secondRoot = new GameRoot();
+    secondRoot.awake();
+    const secondOrphan = new OrphanNode();
+
+    const orphans = gc.findOrphans();
+    expect(orphans).toContain(secondOrphan);
+    expect(orphans).not.toContain(firstOrphan);
+  });
+
+  test("collector configuration is not shared globally", () => {
+    const gameCollector = GarbageCollector.get("GameRoot");
+    const childCollector = GarbageCollector.get("ChildNode");
+
+    expect(gameCollector.root).toBe("GameRoot");
+    expect(childCollector.root).toBe("ChildNode");
   });
 });

@@ -27,6 +27,7 @@ export class InputManager {
 
   private initialized = false;
   private target: EventTarget | null = null;
+  private releaseTarget: EventTarget | null = null;
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     if (!this.down.has(e.key)) {
@@ -36,8 +37,9 @@ export class InputManager {
   };
 
   private readonly onKeyUp = (e: KeyboardEvent): void => {
-    this.down.delete(e.key);
-    this.released.add(e.key);
+    if (this.down.delete(e.key)) {
+      this.released.add(e.key);
+    }
   };
 
   private readonly onMouseMove = (e: MouseEvent): void => {
@@ -49,6 +51,7 @@ export class InputManager {
     this.mouseDelta.x += e.clientX - prevX;
     this.mouseDelta.y += e.clientY - prevY;
 
+    this.releaseMissingMouseButtons(e.buttons);
     if (e.buttons === 0) return;
     if (e.clientX === prevX && e.clientY === prevY) return;
 
@@ -61,6 +64,7 @@ export class InputManager {
   };
 
   private readonly onMouseDown = (e: MouseEvent): void => {
+    this.updateMousePosition(e);
     if (!this.mouseDown.has(e.button)) {
       this.mousePressed.add(e.button);
       this.dragStartByButton.set(e.button, this.mousePos.clone());
@@ -69,18 +73,31 @@ export class InputManager {
   };
 
   private readonly onMouseUp = (e: MouseEvent): void => {
-    this.mouseDown.delete(e.button);
-    this.mouseReleased.add(e.button);
+    this.updateMousePosition(e);
+    if (this.mouseDown.delete(e.button)) {
+      this.mouseReleased.add(e.button);
+    }
     this.draggingButtons.delete(e.button);
     this.dragStartByButton.delete(e.button);
   };
 
   private readonly onWheel = (e: WheelEvent): void => {
+    this.updateMousePosition(e);
     this.wheelDeltaY += e.deltaY;
   };
 
-  private readonly onClick = (): void => {
+  private readonly onClick = (e: MouseEvent): void => {
+    this.updateMousePosition(e);
     this.mouseClick = true;
+  };
+
+  private readonly onBlur = (): void => {
+    for (const key of this.down) this.released.add(key);
+    this.down.clear();
+    for (const button of this.mouseDown) this.mouseReleased.add(button);
+    this.mouseDown.clear();
+    this.draggingButtons.clear();
+    this.dragStartByButton.clear();
   };
 
   public init(target: EventTarget = document.body): void {
@@ -93,6 +110,16 @@ export class InputManager {
     this.target.addEventListener("mouseup", this.onMouseUp as EventListener);
     this.target.addEventListener("wheel", this.onWheel as EventListener);
     this.target.addEventListener("click", this.onClick as EventListener);
+    this.target.addEventListener("blur", this.onBlur as EventListener);
+
+    const ownerWindow = (target as EventTarget & { ownerDocument?: { defaultView?: EventTarget } })
+      .ownerDocument?.defaultView;
+    const globalWindow = typeof window === "undefined" ? undefined : window;
+    this.releaseTarget = ownerWindow ?? globalWindow ?? null;
+    if (this.releaseTarget === this.target) this.releaseTarget = null;
+    this.releaseTarget?.addEventListener("keyup", this.onKeyUp as EventListener);
+    this.releaseTarget?.addEventListener("mouseup", this.onMouseUp as EventListener);
+    this.releaseTarget?.addEventListener("blur", this.onBlur as EventListener);
     this.initialized = true;
   }
 
@@ -105,6 +132,11 @@ export class InputManager {
     this.target.removeEventListener("mouseup", this.onMouseUp as EventListener);
     this.target.removeEventListener("wheel", this.onWheel as EventListener);
     this.target.removeEventListener("click", this.onClick as EventListener);
+    this.target.removeEventListener("blur", this.onBlur as EventListener);
+    this.releaseTarget?.removeEventListener("keyup", this.onKeyUp as EventListener);
+    this.releaseTarget?.removeEventListener("mouseup", this.onMouseUp as EventListener);
+    this.releaseTarget?.removeEventListener("blur", this.onBlur as EventListener);
+    this.releaseTarget = null;
     this.target = null;
     this.initialized = false;
     this.down.clear();
@@ -154,11 +186,11 @@ export class InputManager {
   }
 
   public getMousePos(): Vector2D {
-    return this.mousePos;
+    return this.mousePos.clone();
   }
 
   public getMouseDelta(): Vector2D {
-    return this.mouseDelta;
+    return this.mouseDelta.clone();
   }
 
   public getWheelDeltaY(): number {
@@ -172,12 +204,12 @@ export class InputManager {
 
   public getDragStartPos(button?: number): Vector2D | null {
     if (button !== undefined) {
-      return this.dragStartByButton.get(button) ?? null;
+      return this.dragStartByButton.get(button)?.clone() ?? null;
     }
 
     const first = this.dragStartByButton.values().next();
     if (first.done) return null;
-    return first.value;
+    return first.value.clone();
   }
 
   /** Call once at the end of each frame to reset pressed/released state. */
@@ -190,5 +222,22 @@ export class InputManager {
     this.mouseDelta.y = 0;
     this.wheelDeltaY = 0;
     this.mouseClick = false;
+  }
+
+  private updateMousePosition(e: MouseEvent): void {
+    if (Number.isFinite(e.clientX) && Number.isFinite(e.clientY)) {
+      this.mousePos.set(e.clientX, e.clientY);
+    }
+  }
+
+  private releaseMissingMouseButtons(buttons: number): void {
+    for (const button of Array.from(this.mouseDown)) {
+      const mask = button === 0 ? 1 : button === 1 ? 4 : button === 2 ? 2 : 1 << button;
+      if ((buttons & mask) !== 0) continue;
+      this.mouseDown.delete(button);
+      this.mouseReleased.add(button);
+      this.draggingButtons.delete(button);
+      this.dragStartByButton.delete(button);
+    }
   }
 }

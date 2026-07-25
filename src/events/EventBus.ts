@@ -28,10 +28,11 @@ type ListenerMap<TPayload> = {
  * ```
  *
  * Listeners are kept pre-sorted by priority (lower number = fired first).
- * `stopPropagation()` on an event stops listeners at the same priority level.
+ * `stopPropagation()` on an event stops remaining listeners.
  */
 export class BroadcastEventBus<TPayload extends Record<string, unknown>> {
   private listeners: ListenerMap<TPayload> = {};
+  private activeListenerIds = new Set<string>();
   private contextId: string = crypto.randomUUID();
 
   /**
@@ -61,11 +62,14 @@ export class BroadcastEventBus<TPayload extends Record<string, unknown>> {
       }
     }
     list.splice(insertAt, 0, listener as EventListener<TPayload, keyof TPayload>);
+    this.activeListenerIds.add(id);
 
     return id;
   }
 
   public unsubscribe(id: string): void {
+    if (!this.activeListenerIds.delete(id)) return;
+
     for (const eventType in this.listeners) {
       const list = this.listeners[eventType as keyof TPayload];
       if (list) {
@@ -87,7 +91,8 @@ export class BroadcastEventBus<TPayload extends Record<string, unknown>> {
     const list = this.listeners[event.type];
     if (!list) return;
 
-    for (const listener of list) {
+    for (const listener of list.slice()) {
+      if (!this.activeListenerIds.has(listener.id)) continue;
       (listener.callback as EventCallback<TPayload, T>)(event);
       if (event.propagationStopped) break;
     }
