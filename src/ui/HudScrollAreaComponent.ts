@@ -20,9 +20,10 @@ export type HudScrollAreaOptions = {
 };
 
 export class HudScrollAreaComponent<T extends Entity = Entity> extends Component<T> {
-  public contentExtent = 0;
+  private _contentExtent = 0;
   public scrollOffset = 0;
   public hoveredThumb = false;
+  private lastViewportExtent: number | null = null;
 
   public readonly trackInsetRight: number;
   public readonly trackInsetTop: number;
@@ -43,16 +44,34 @@ export class HudScrollAreaComponent<T extends Entity = Entity> extends Component
     this.thumbHitPaddingY = options.thumbHitPaddingY ?? 1;
   }
 
-  public setContentExtent(extent: number): void {
-    this.contentExtent = Math.max(0, extent);
+  public get contentExtent(): number {
+    return this._contentExtent;
+  }
+
+  public set contentExtent(extent: number) {
+    this._contentExtent = Number.isFinite(extent) ? Math.max(0, extent) : 0;
+    if (this.lastViewportExtent !== null) {
+      this.clampScrollOffset(this.lastViewportExtent);
+    }
+  }
+
+  public setContentExtent(extent: number, viewportExtent?: number): void {
+    if (viewportExtent !== undefined) {
+      this.lastViewportExtent = this.normalizeViewportExtent(viewportExtent);
+    }
+    this.contentExtent = extent;
   }
 
   public getMaxScroll(viewportExtent: number): number {
-    return Math.max(0, this.contentExtent - viewportExtent);
+    const viewport = this.normalizeViewportExtent(viewportExtent);
+    return Math.max(0, this.contentExtent - viewport);
   }
 
   public setScrollOffset(offset: number, viewportExtent: number): void {
-    this.scrollOffset = Math.max(0, Math.min(offset, this.getMaxScroll(viewportExtent)));
+    const viewport = this.normalizeViewportExtent(viewportExtent);
+    this.lastViewportExtent = viewport;
+    const safeOffset = Number.isFinite(offset) ? offset : 0;
+    this.scrollOffset = Math.max(0, Math.min(safeOffset, this.getMaxScroll(viewport)));
   }
 
   public scrollBy(delta: number, viewportExtent: number): void {
@@ -60,21 +79,27 @@ export class HudScrollAreaComponent<T extends Entity = Entity> extends Component
   }
 
   public getMetrics(hostRect: UiRect, viewportExtent: number): HudScrollAreaMetrics | null {
-    if (this.contentExtent <= viewportExtent + 1) {
+    const viewport = this.normalizeViewportExtent(viewportExtent);
+    this.lastViewportExtent = viewport;
+    this.clampScrollOffset(viewport);
+    if (this.contentExtent <= viewport + 1) {
       return null;
     }
 
     const trackRect = {
       x: hostRect.x + hostRect.width - this.trackInsetRight,
       y: hostRect.y + this.trackInsetTop,
-      width: this.trackWidth,
-      height: hostRect.height - this.trackInsetTop - this.trackInsetBottom,
+      width: Math.max(0, this.trackWidth),
+      height: Math.max(0, hostRect.height - this.trackInsetTop - this.trackInsetBottom),
     };
-    const ratio = viewportExtent / this.contentExtent;
-    const thumbHeight = Math.max(this.minThumbHeight, Math.floor(trackRect.height * ratio));
-    const maxThumbOffset = trackRect.height - thumbHeight;
-    const maxScroll = this.getMaxScroll(viewportExtent);
-    const thumbOffset = maxThumbOffset * (this.scrollOffset / Math.max(1, maxScroll));
+    const ratio = Math.max(0, Math.min(1, viewport / this.contentExtent));
+    const thumbHeight = Math.min(
+      trackRect.height,
+      Math.max(0, this.minThumbHeight, Math.floor(trackRect.height * ratio)),
+    );
+    const maxThumbOffset = Math.max(0, trackRect.height - thumbHeight);
+    const maxScroll = this.getMaxScroll(viewport);
+    const thumbOffset = maxScroll > 0 ? maxThumbOffset * (this.scrollOffset / maxScroll) : 0;
     const thumbRect = {
       x: trackRect.x,
       y: trackRect.y + thumbOffset,
@@ -93,5 +118,14 @@ export class HudScrollAreaComponent<T extends Entity = Entity> extends Component
         height: thumbRect.height + this.thumbHitPaddingY * 2,
       },
     };
+  }
+
+  private normalizeViewportExtent(viewportExtent: number): number {
+    return Number.isFinite(viewportExtent) ? Math.max(0, viewportExtent) : 0;
+  }
+
+  private clampScrollOffset(viewportExtent: number): void {
+    const safeOffset = Number.isFinite(this.scrollOffset) ? this.scrollOffset : 0;
+    this.scrollOffset = Math.max(0, Math.min(safeOffset, this.getMaxScroll(viewportExtent)));
   }
 }

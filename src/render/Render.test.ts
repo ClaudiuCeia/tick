@@ -94,7 +94,11 @@ beforeEach(() => {
   };
 });
 
-const createCtx = () => ({}) as CanvasRenderingContext2D;
+const createCtx = () =>
+  ({
+    save: () => {},
+    restore: () => {},
+  }) as unknown as CanvasRenderingContext2D;
 
 describe("RenderComponent visibility", () => {
   test("returns false when entity is not awake", () => {
@@ -271,8 +275,8 @@ describe("RenderSystem ordering and registration", () => {
     );
     system.render();
 
-    expect(saveCount).toBe(1);
-    expect(restoreCount).toBe(1);
+    expect(saveCount).toBe(3);
+    expect(restoreCount).toBe(3);
     expect(setTransformCalls).toHaveLength(1);
     expect(setTransformCalls[0]?.[0]).toBeCloseTo(2);
     expect(setTransformCalls[0]?.[3]).toBeCloseTo(2);
@@ -372,5 +376,212 @@ describe("RenderSystem ordering and registration", () => {
     system.render();
 
     expect(probe.seen).toBeNull();
+  });
+
+  test("keeps equal-z draw order stable and re-sorts zIndex mutations", () => {
+    const camera = new CameraEntity();
+    camera.awake();
+    const log: string[] = [];
+
+    const firstOwner = new Node();
+    const first = new HudLoggedRenderComponent(RenderLayer.HUD, "first", log);
+    firstOwner.addComponent(first);
+    firstOwner.awake();
+
+    const secondOwner = new Node();
+    const second = new HudLoggedRenderComponent(RenderLayer.HUD, "second", log);
+    secondOwner.addComponent(second);
+    secondOwner.awake();
+
+    const system = new RenderSystem({ context: createCtx(), size: new Vector2D(100, 100) }, camera);
+    system.render();
+    expect(log).toEqual(["first", "second"]);
+
+    log.length = 0;
+    first.zIndex = RenderLayer.HUD + 1;
+    system.render();
+    expect(log).toEqual(["second", "first"]);
+  });
+
+  test("keeps stable z-order across many registrations", () => {
+    const camera = new CameraEntity();
+    camera.awake();
+    const log: string[] = [];
+    const expected: Array<{ label: string; zIndex: number; order: number }> = [];
+
+    for (let i = 0; i < 512; i++) {
+      const zIndex = RenderLayer.HUD + ((i * 17) % 11);
+      const label = `renderer-${i}`;
+      const owner = new Node();
+      owner.addComponent(new HudLoggedRenderComponent(zIndex, label, log));
+      owner.awake();
+      expected.push({ label, zIndex, order: i });
+    }
+
+    new RenderSystem({ context: createCtx(), size: new Vector2D(100, 100) }, camera).render();
+    expect(log).toEqual(
+      expected.sort((a, b) => a.zIndex - b.zIndex || a.order - b.order).map((entry) => entry.label),
+    );
+  });
+
+  test("commits zIndex mutations made during rendering on the next frame", () => {
+    let other: Node;
+    let observedOrder: [number | null, number | null] | null = null;
+    const log: string[] = [];
+
+    class MutatingHud extends HudRenderComponent<Node> {
+      private mutated = false;
+
+      override doRender(): void {
+        log.push("mutating");
+        if (this.mutated) return;
+        this.mutated = true;
+        this.zIndex = RenderLayer.HUD + 10;
+        observedOrder = [
+          RenderSystem.getHudDrawOrder(this.ent, this.ent.runtime),
+          RenderSystem.getHudDrawOrder(other, this.ent.runtime),
+        ];
+        expect(this.zIndex).toBe(RenderLayer.HUD);
+      }
+    }
+
+    const camera = new CameraEntity();
+    camera.awake();
+    const first = new Node();
+    first.addComponent(new MutatingHud());
+    first.awake();
+    other = new Node();
+    other.addComponent(new HudLoggedRenderComponent(RenderLayer.HUD, "other", log));
+    other.awake();
+    const system = new RenderSystem({ context: createCtx(), size: new Vector2D(100, 100) }, camera);
+
+    system.render();
+    expect(log).toEqual(["mutating", "other"]);
+    expect(observedOrder?.[0]).toBeLessThan(observedOrder?.[1] ?? -1);
+
+    log.length = 0;
+    system.render();
+    expect(log).toEqual(["other", "mutating"]);
+  });
+
+  test("does not skip the next renderer when one unregisters itself", () => {
+    class SelfDestroyingHud extends HudRenderComponent<Node> {
+      constructor(private readonly log: string[]) {
+        super();
+      }
+
+      override doRender(): void {
+        this.log.push("self");
+        this.ent.destroy();
+      }
+    }
+
+    const camera = new CameraEntity();
+    camera.awake();
+    const log: string[] = [];
+
+    const first = new Node();
+    first.addComponent(new SelfDestroyingHud(log));
+    first.awake();
+    const second = new Node();
+    second.addComponent(new HudLoggedRenderComponent(RenderLayer.HUD, "next", log));
+    second.awake();
+
+    new RenderSystem({ context: createCtx(), size: new Vector2D(100, 100) }, camera).render();
+    expect(log).toEqual(["self", "next"]);
+  });
+
+  test("restores canvas state when a renderer throws", () => {
+    class ThrowingHud extends HudRenderComponent<Node> {
+      override doRender(): void {
+        throw new Error("render failed");
+      }
+    }
+
+    const owner = new Node();
+    const component = new ThrowingHud();
+    owner.addComponent(component);
+    owner.awake();
+
+    let saves = 0;
+    let restores = 0;
+    const ctx = {
+      save: () => saves++,
+      restore: () => restores++,
+    } as unknown as CanvasRenderingContext2D;
+
+    expect(() => component.render(ctx, new CameraEntity(), new Vector2D(100, 100))).toThrow(
+      "render failed",
+    );
+    expect(saves).toBe(1);
+    expect(restores).toBe(1);
+  });
+
+  test("inherits hidden layout state from ancestor containers", () => {
+    const camera = new CameraEntity();
+    camera.awake();
+    const root = new Node();
+    const rootLayout = new HudLayoutNodeComponent({ width: 100, height: 100 });
+    rootLayout.visible = false;
+    root.addComponent(rootLayout);
+    const child = new Node();
+    const probe = new CanvasSizeProbeHudComponent();
+    child.addComponent(probe);
+    root.addChild(child);
+    root.awake();
+
+    new RenderSystem({ context: createCtx(), size: new Vector2D(100, 100) }, camera).render();
+    expect(probe.seen).toBeNull();
+  });
+
+  test("dispose detaches its owned HUD input router exactly once", () => {
+    const originalCanvasClass = globalThis.HTMLCanvasElement;
+    const originalWindow = globalThis.window;
+    let removals = 0;
+
+    class TestCanvas {
+      public width = 100;
+      public height = 100;
+      public addEventListener(): void {}
+      public removeEventListener(): void {
+        removals++;
+      }
+      public getBoundingClientRect(): DOMRect {
+        return { left: 0, top: 0, width: 100, height: 100 } as DOMRect;
+      }
+    }
+
+    Object.defineProperty(globalThis, "HTMLCanvasElement", {
+      value: TestCanvas,
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, "window", {
+      value: { addEventListener() {}, removeEventListener() {} },
+      configurable: true,
+    });
+
+    try {
+      const camera = new CameraEntity();
+      camera.awake();
+      const canvas = new TestCanvas();
+      const ctx = { ...createCtx(), canvas } as unknown as CanvasRenderingContext2D;
+      const system = new RenderSystem({ context: ctx, size: new Vector2D(100, 100) }, camera);
+      system.render();
+      system.dispose();
+      const firstRemovalCount = removals;
+      system.dispose();
+
+      expect(firstRemovalCount).toBe(8);
+      expect(removals).toBe(firstRemovalCount);
+    } finally {
+      Object.defineProperty(globalThis, "HTMLCanvasElement", {
+        value: originalCanvasClass,
+        configurable: true,
+      });
+      Object.defineProperty(globalThis, "window", {
+        value: originalWindow,
+        configurable: true,
+      });
+    }
   });
 });

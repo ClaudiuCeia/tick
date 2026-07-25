@@ -37,4 +37,34 @@ describe("SpriteAnimator", () => {
     animator.play("jump");
     expect(animator.getFrame()).toBe("j");
   });
+
+  test("advances very large deltas arithmetically", () => {
+    const animator = new SpriteAnimator("idle");
+    animator.defineClip("run", { frames: ["a", "b", "c"], frameDuration: 1 });
+    animator.play("run");
+
+    animator.update(1_000_000_001);
+    expect(animator.getFrame()).toBe("c");
+  });
+
+  test("handles finite inputs whose duration division would overflow", () => {
+    const animator = new SpriteAnimator("idle");
+    animator.defineClip("run", {
+      frames: ["a", "b", "c"],
+      frameDuration: Number.MIN_VALUE,
+    });
+    animator.play("run");
+
+    animator.update(Number.MAX_VALUE);
+    expect(["a", "b", "c"]).toContain(animator.getFrame());
+    animator.update(Number.MIN_VALUE);
+    expect(["a", "b", "c"]).toContain(animator.getFrame());
+  });
+
+  test("rejects non-finite frame durations", () => {
+    const animator = new SpriteAnimator("idle");
+    expect(() =>
+      animator.defineClip("invalid", { frames: ["a", "b"], frameDuration: Infinity }),
+    ).toThrow("finite and > 0");
+  });
 });

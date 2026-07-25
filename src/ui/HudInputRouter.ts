@@ -4,22 +4,23 @@ import type { HudViewport } from "../render/HudViewport.ts";
 import type { HudInputComponent } from "./HudInputComponent.ts";
 import { HudInputEvent, type HudInputEventType, type HudPointerType } from "./HudInputEvent.ts";
 import { HudLayoutNodeComponent } from "./HudLayoutNodeComponent.ts";
+import { RenderSystem } from "../render/RenderSystem.ts";
 
 type RouterConfig = {
   canvasElement?: HTMLCanvasElement | null;
   hudViewport?: HudViewport | null;
+  owner?: object | null;
 };
 
 type AttachedHandlers = {
-  mousemove: (event: MouseEvent) => void;
-  mousedown: (event: MouseEvent) => void;
-  mouseup: (event: MouseEvent) => void;
+  pointermove: (event: PointerEvent) => void;
+  pointerdown: (event: PointerEvent) => void;
+  pointerup: (event: PointerEvent) => void;
+  pointercancel: (event: PointerEvent) => void;
+  pointerleave: (event: PointerEvent) => void;
+  lostpointercapture: (event: PointerEvent) => void;
   click: (event: MouseEvent) => void;
   wheel: (event: WheelEvent) => void;
-  touchstart: (event: TouchEvent) => void;
-  touchmove: (event: TouchEvent) => void;
-  touchend: (event: TouchEvent) => void;
-  touchcancel: (event: TouchEvent) => void;
   keydown: (event: KeyboardEvent) => void;
   keyup: (event: KeyboardEvent) => void;
 };
@@ -31,6 +32,8 @@ type RuntimeState = {
   hudViewport: HudViewport | null;
   canvasElement: HTMLCanvasElement | null;
   handlers: AttachedHandlers | null;
+  owner: object | null;
+  activePointers: Map<number, HudInputComponent[]>;
   capturedPointerEvents: Set<
     Extract<HudInputEventType, "pointermove" | "pointerdown" | "pointerup" | "click" | "wheel">
   >;
@@ -58,6 +61,7 @@ const makeEvent = (
     hudPoint: Vector2D | null;
     clientPoint?: Vector2D;
     pointerType?: HudPointerType;
+    pointerId?: number;
     touchId?: number;
     key?: string;
     code?: string;
@@ -88,6 +92,8 @@ class HudInputRouterImpl {
         hudViewport: null,
         canvasElement: null,
         handlers: null,
+        owner: null,
+        activePointers: new Map(),
         capturedPointerEvents: new Set(),
       };
       this.states.set(runtime, state);
@@ -101,37 +107,97 @@ class HudInputRouterImpl {
 
     const canvas = config.canvasElement ?? null;
     if (canvas === state.canvasElement) {
+      state.owner = config.owner ?? null;
       return;
     }
 
     this.detach(runtime);
     if (!canvas) return;
 
-    const handlers: AttachedHandlers = {
-      mousemove: (event) => {
-        const clientPoint = new Vector2D(event.clientX, event.clientY);
-        const hudPoint = this.clientToHud(runtime, clientPoint, canvas);
+    const getPointerType = (event: PointerEvent): HudPointerType =>
+      event.pointerType === "touch" || event.pointerType === "pen" ? event.pointerType : "mouse";
+    const getHudType = (
+      event: PointerEvent,
+      mouseType: Extract<
+        HudInputEventType,
+        "pointermove" | "pointerdown" | "pointerup" | "pointercancel"
+      >,
+    ): Extract<
+      HudInputEventType,
+      | "pointermove"
+      | "pointerdown"
+      | "pointerup"
+      | "pointercancel"
+      | "touchstart"
+      | "touchmove"
+      | "touchend"
+      | "touchcancel"
+    > => {
+      if (event.pointerType !== "touch") return mouseType;
+      if (mouseType === "pointerdown") return "touchstart";
+      if (mouseType === "pointermove") return "touchmove";
+      if (mouseType === "pointerup") return "touchend";
+      return "touchcancel";
+    };
+    const routeDomPointer = (
+      event: PointerEvent,
+      type: "pointermove" | "pointerdown" | "pointerup" | "pointercancel",
+    ): void => {
+      const clientPoint = new Vector2D(event.clientX, event.clientY);
+      const hudPoint = this.clientToHud(runtime, clientPoint, canvas);
+      const pointerType = getPointerType(event);
+      if (type === "pointermove" && pointerType !== "touch") {
         this.updateHover(runtime, hudPoint, clientPoint, event);
-        this.routePointer(runtime, "pointermove", hudPoint, clientPoint, {
-          pointerType: "mouse",
-          nativeEvent: event,
-        });
+      }
+      this.routePointer(runtime, getHudType(event, type), hudPoint, clientPoint, {
+        pointerType,
+        pointerId: event.pointerId,
+        touchId: pointerType === "touch" ? event.pointerId : undefined,
+        nativeEvent: event,
+      });
+    };
+
+    const handlers: AttachedHandlers = {
+      pointermove: (event) => routeDomPointer(event, "pointermove"),
+      pointerdown: (event) => {
+        routeDomPointer(event, "pointerdown");
+        if (state.activePointers.has(event.pointerId)) {
+          try {
+            canvas.setPointerCapture(event.pointerId);
+          } catch {
+            // Pointer capture can fail if the pointer is no longer active.
+          }
+        }
       },
-      mousedown: (event) => {
-        const clientPoint = new Vector2D(event.clientX, event.clientY);
-        const hudPoint = this.clientToHud(runtime, clientPoint, canvas);
-        this.routePointer(runtime, "pointerdown", hudPoint, clientPoint, {
-          pointerType: "mouse",
-          nativeEvent: event,
-        });
+      pointerup: (event) => {
+        routeDomPointer(event, "pointerup");
+        try {
+          if (canvas.hasPointerCapture?.(event.pointerId)) {
+            canvas.releasePointerCapture(event.pointerId);
+          }
+        } catch {
+          // Capture may already have been released by the browser.
+        }
       },
-      mouseup: (event) => {
-        const clientPoint = new Vector2D(event.clientX, event.clientY);
-        const hudPoint = this.clientToHud(runtime, clientPoint, canvas);
-        this.routePointer(runtime, "pointerup", hudPoint, clientPoint, {
-          pointerType: "mouse",
-          nativeEvent: event,
-        });
+      pointercancel: (event) => {
+        routeDomPointer(event, "pointercancel");
+        try {
+          if (canvas.hasPointerCapture?.(event.pointerId)) {
+            canvas.releasePointerCapture(event.pointerId);
+          }
+        } catch {
+          // Capture may already have been released by the browser.
+        }
+      },
+      pointerleave: (event) => {
+        if (!state.activePointers.has(event.pointerId)) {
+          this.clearHover(runtime, event);
+        }
+      },
+      lostpointercapture: (event) => {
+        if (state.activePointers.has(event.pointerId)) {
+          routeDomPointer(event, "pointercancel");
+        }
       },
       click: (event) => {
         const clientPoint = new Vector2D(event.clientX, event.clientY);
@@ -150,58 +216,6 @@ class HudInputRouterImpl {
           nativeEvent: event,
         });
       },
-      touchstart: (event) => {
-        for (let i = 0; i < event.changedTouches.length; i++) {
-          const touch = event.changedTouches[i];
-          if (!touch) continue;
-          const clientPoint = new Vector2D(touch.clientX, touch.clientY);
-          const hudPoint = this.clientToHud(runtime, clientPoint, canvas);
-          this.routePointer(runtime, "touchstart", hudPoint, clientPoint, {
-            pointerType: "touch",
-            touchId: touch.identifier,
-            nativeEvent: event,
-          });
-        }
-      },
-      touchmove: (event) => {
-        for (let i = 0; i < event.changedTouches.length; i++) {
-          const touch = event.changedTouches[i];
-          if (!touch) continue;
-          const clientPoint = new Vector2D(touch.clientX, touch.clientY);
-          const hudPoint = this.clientToHud(runtime, clientPoint, canvas);
-          this.routePointer(runtime, "touchmove", hudPoint, clientPoint, {
-            pointerType: "touch",
-            touchId: touch.identifier,
-            nativeEvent: event,
-          });
-        }
-      },
-      touchend: (event) => {
-        for (let i = 0; i < event.changedTouches.length; i++) {
-          const touch = event.changedTouches[i];
-          if (!touch) continue;
-          const clientPoint = new Vector2D(touch.clientX, touch.clientY);
-          const hudPoint = this.clientToHud(runtime, clientPoint, canvas);
-          this.routePointer(runtime, "touchend", hudPoint, clientPoint, {
-            pointerType: "touch",
-            touchId: touch.identifier,
-            nativeEvent: event,
-          });
-        }
-      },
-      touchcancel: (event) => {
-        for (let i = 0; i < event.changedTouches.length; i++) {
-          const touch = event.changedTouches[i];
-          if (!touch) continue;
-          const clientPoint = new Vector2D(touch.clientX, touch.clientY);
-          const hudPoint = this.clientToHud(runtime, clientPoint, canvas);
-          this.routePointer(runtime, "touchcancel", hudPoint, clientPoint, {
-            pointerType: "touch",
-            touchId: touch.identifier,
-            nativeEvent: event,
-          });
-        }
-      },
       keydown: (event) => {
         this.routeKey(runtime, "keydown", event.key, event.code, event);
       },
@@ -210,15 +224,14 @@ class HudInputRouterImpl {
       },
     };
 
-    canvas.addEventListener("mousemove", handlers.mousemove);
-    canvas.addEventListener("mousedown", handlers.mousedown);
-    canvas.addEventListener("mouseup", handlers.mouseup);
+    canvas.addEventListener("pointermove", handlers.pointermove, { passive: false });
+    canvas.addEventListener("pointerdown", handlers.pointerdown, { passive: false });
+    canvas.addEventListener("pointerup", handlers.pointerup, { passive: false });
+    canvas.addEventListener("pointercancel", handlers.pointercancel, { passive: false });
+    canvas.addEventListener("pointerleave", handlers.pointerleave, { passive: false });
+    canvas.addEventListener("lostpointercapture", handlers.lostpointercapture, { passive: false });
     canvas.addEventListener("click", handlers.click);
-    canvas.addEventListener("wheel", handlers.wheel);
-    canvas.addEventListener("touchstart", handlers.touchstart, { passive: true });
-    canvas.addEventListener("touchmove", handlers.touchmove, { passive: true });
-    canvas.addEventListener("touchend", handlers.touchend, { passive: true });
-    canvas.addEventListener("touchcancel", handlers.touchcancel, { passive: true });
+    canvas.addEventListener("wheel", handlers.wheel, { passive: false });
 
     if (typeof window !== "undefined") {
       window.addEventListener("keydown", handlers.keydown, { capture: true });
@@ -227,26 +240,38 @@ class HudInputRouterImpl {
 
     state.canvasElement = canvas;
     state.handlers = handlers;
+    state.owner = config.owner ?? null;
   }
 
-  public detach(runtime: EcsRuntime): void {
+  public detach(runtime: EcsRuntime, owner?: object): void {
     const state = this.getState(runtime);
+    if (owner && state.owner !== owner) return;
     if (!state.canvasElement || !state.handlers) {
       state.canvasElement = null;
       state.handlers = null;
+      state.owner = null;
+      state.activePointers.clear();
       return;
     }
 
     const { canvasElement: canvas, handlers } = state;
-    canvas.removeEventListener("mousemove", handlers.mousemove);
-    canvas.removeEventListener("mousedown", handlers.mousedown);
-    canvas.removeEventListener("mouseup", handlers.mouseup);
+    for (const pointerId of state.activePointers.keys()) {
+      try {
+        if (!canvas.hasPointerCapture || canvas.hasPointerCapture(pointerId)) {
+          canvas.releasePointerCapture(pointerId);
+        }
+      } catch {
+        // Capture may already have been released by the browser.
+      }
+    }
+    canvas.removeEventListener("pointermove", handlers.pointermove);
+    canvas.removeEventListener("pointerdown", handlers.pointerdown);
+    canvas.removeEventListener("pointerup", handlers.pointerup);
+    canvas.removeEventListener("pointercancel", handlers.pointercancel);
+    canvas.removeEventListener("pointerleave", handlers.pointerleave);
+    canvas.removeEventListener("lostpointercapture", handlers.lostpointercapture);
     canvas.removeEventListener("click", handlers.click);
     canvas.removeEventListener("wheel", handlers.wheel);
-    canvas.removeEventListener("touchstart", handlers.touchstart);
-    canvas.removeEventListener("touchmove", handlers.touchmove);
-    canvas.removeEventListener("touchend", handlers.touchend);
-    canvas.removeEventListener("touchcancel", handlers.touchcancel);
 
     if (typeof window !== "undefined") {
       window.removeEventListener("keydown", handlers.keydown, true);
@@ -255,6 +280,8 @@ class HudInputRouterImpl {
 
     state.canvasElement = null;
     state.handlers = null;
+    state.owner = null;
+    state.activePointers.clear();
   }
 
   public register(component: HudInputComponent, runtime: EcsRuntime): void {
@@ -263,15 +290,29 @@ class HudInputRouterImpl {
 
   public unregister(component: HudInputComponent, runtime: EcsRuntime): void {
     const state = this.getState(runtime);
+    if (state.focusedId === component.ent.id) {
+      this.setFocused(state, null);
+    }
     state.components.delete(component);
     state.hoveredIds.delete(component.ent.id);
-    if (state.focusedId === component.ent.id) {
-      state.focusedId = null;
+    for (const [pointerId, targets] of state.activePointers) {
+      const remaining = targets.filter((target) => target !== component);
+      if (remaining.length > 0) {
+        state.activePointers.set(pointerId, remaining);
+      } else {
+        state.activePointers.delete(pointerId);
+      }
     }
   }
 
   public isFocused(component: HudInputComponent, runtime: EcsRuntime): boolean {
-    return this.getState(runtime).focusedId === component.ent.id;
+    const state = this.getState(runtime);
+    this.revalidateFocus(state);
+    return state.focusedId === component.ent.id;
+  }
+
+  public revalidate(runtime: EcsRuntime): void {
+    this.revalidateFocus(this.getState(runtime));
   }
 
   public consumePointerCapture(
@@ -294,6 +335,7 @@ class HudInputRouterImpl {
       | "pointermove"
       | "pointerdown"
       | "pointerup"
+      | "pointercancel"
       | "click"
       | "wheel"
       | "touchstart"
@@ -305,31 +347,74 @@ class HudInputRouterImpl {
     clientPoint: Vector2D,
     options: {
       pointerType: HudPointerType;
+      pointerId?: number;
       touchId?: number;
       wheelDelta?: Vector2D;
       nativeEvent?: Event;
     },
   ): void {
     const state = this.getState(runtime);
-    const candidates = this.getPointerCandidates(runtime, hudPoint, options.pointerType);
+    this.revalidateFocus(state);
+    const pointerId = options.pointerId ?? options.touchId ?? 1;
+    const isStart = type === "pointerdown" || type === "touchstart";
+    if (isStart) {
+      state.activePointers.delete(pointerId);
+    }
+    const isEnd =
+      type === "pointerup" ||
+      type === "pointercancel" ||
+      type === "touchend" ||
+      type === "touchcancel";
+    const isCancel = type === "pointercancel" || type === "touchcancel";
+    const usesCapture =
+      type === "pointermove" ||
+      type === "pointerup" ||
+      type === "pointercancel" ||
+      type === "touchmove" ||
+      type === "touchend" ||
+      type === "touchcancel";
+    const captured = usesCapture ? state.activePointers.get(pointerId) : undefined;
+    const candidates = captured
+      ? [...captured]
+      : this.getPointerCandidates(runtime, hudPoint, options.pointerType);
+    const cancelledHoverIds = isCancel
+      ? candidates
+          .map((component) => component.entity?.id)
+          .filter((id): id is string => id !== undefined)
+      : [];
 
-    if ((type === "pointerdown" || type === "touchstart") && candidates.length === 0) {
+    if (isStart && candidates.length === 0) {
       this.setFocused(state, null, options.nativeEvent, hudPoint, clientPoint, options.pointerType);
     }
 
+    const delivered: HudInputComponent[] = [];
+    let assignedFocus = false;
     for (const component of candidates) {
+      if (
+        !this.isPointerEligible(state, component, options.pointerType, captured ? null : hudPoint)
+      ) {
+        continue;
+      }
       const event = makeEvent(type, {
         hudPoint,
         clientPoint,
         pointerType: options.pointerType,
+        pointerId,
         touchId: options.touchId,
         wheelDelta: options.wheelDelta,
         nativeEvent: options.nativeEvent,
       });
 
       component.handleHudInput(event);
+      delivered.push(component);
+      this.revalidateFocus(state);
 
-      if ((type === "pointerdown" || type === "touchstart") && component.focusable) {
+      if (
+        isStart &&
+        !assignedFocus &&
+        component.focusable &&
+        this.isBaseEligible(state, component)
+      ) {
         this.setFocused(
           state,
           component,
@@ -338,6 +423,8 @@ class HudInputRouterImpl {
           clientPoint,
           options.pointerType,
         );
+        assignedFocus = true;
+        this.revalidateFocus(state);
       }
 
       if (event.propagationStopped) {
@@ -354,6 +441,30 @@ class HudInputRouterImpl {
         break;
       }
     }
+
+    const activeTargets = delivered.filter((component) =>
+      this.isPointerEligible(state, component, options.pointerType, null),
+    );
+    if (isStart && activeTargets.length > 0) {
+      state.activePointers.set(pointerId, activeTargets);
+    } else if (isStart) {
+      state.activePointers.delete(pointerId);
+      if (!assignedFocus) {
+        this.setFocused(
+          state,
+          null,
+          options.nativeEvent,
+          hudPoint,
+          clientPoint,
+          options.pointerType,
+        );
+      }
+    } else if (isEnd) {
+      state.activePointers.delete(pointerId);
+    }
+    for (const id of cancelledHoverIds) {
+      state.hoveredIds.delete(id);
+    }
   }
 
   public routeKey(
@@ -364,13 +475,10 @@ class HudInputRouterImpl {
     nativeEvent?: Event,
   ): void {
     const state = this.getState(runtime);
+    this.revalidateFocus(state);
 
-    const all = Array.from(state.components).filter(
-      (component) =>
-        component.ent.isAwake &&
-        component.enabled &&
-        component.interactive &&
-        component.keyboardEnabled,
+    const all = Array.from(state.components).filter((component) =>
+      this.isKeyboardEligible(state, component),
     );
 
     const focused =
@@ -388,6 +496,12 @@ class HudInputRouterImpl {
     const targets = focused ? [focused, ...globals] : globals;
 
     for (const component of targets) {
+      if (!this.isKeyboardEligible(state, component)) continue;
+      if (component === focused) {
+        if (component.keyboardMode !== "focused") continue;
+      } else if (component.keyboardMode !== "global") {
+        continue;
+      }
       const event = makeEvent(type, {
         hudPoint: null,
         key,
@@ -395,6 +509,7 @@ class HudInputRouterImpl {
         nativeEvent,
       });
       component.handleHudInput(event);
+      this.revalidateFocus(state);
       if (event.propagationStopped) {
         this.consumeNativeEvent(nativeEvent);
         break;
@@ -411,13 +526,14 @@ class HudInputRouterImpl {
     pointerType: HudPointerType = "mouse",
   ): void {
     const prevId = state.focusedId;
-    const nextId = next?.ent.id ?? null;
+    const nextId = next?.entity?.id ?? null;
     if (prevId === nextId) return;
 
     const prev =
       prevId === null
         ? null
-        : (Array.from(state.components).find((component) => component.ent.id === prevId) ?? null);
+        : (Array.from(state.components).find((component) => component.entity?.id === prevId) ??
+          null);
 
     state.focusedId = nextId;
 
@@ -455,6 +571,7 @@ class HudInputRouterImpl {
     const nextIds = new Set(hits.map((component) => component.ent.id));
 
     for (const component of hits) {
+      if (!this.isPointerEligible(state, component, "mouse", hudPoint)) continue;
       if (state.hoveredIds.has(component.ent.id)) continue;
       component.handleHudInput(
         makeEvent("pointerenter", {
@@ -468,7 +585,7 @@ class HudInputRouterImpl {
 
     for (const id of state.hoveredIds) {
       if (nextIds.has(id)) continue;
-      const component = Array.from(state.components).find((entry) => entry.ent.id === id);
+      const component = Array.from(state.components).find((entry) => entry.entity?.id === id);
       if (!component) continue;
       component.handleHudInput(
         makeEvent("pointerleave", {
@@ -480,7 +597,31 @@ class HudInputRouterImpl {
       );
     }
 
-    state.hoveredIds = nextIds;
+    state.hoveredIds = new Set(
+      Array.from(nextIds).filter((id) =>
+        Array.from(state.components).some(
+          (component) =>
+            component.entity?.id === id &&
+            this.isPointerEligible(state, component, "mouse", hudPoint),
+        ),
+      ),
+    );
+  }
+
+  private clearHover(runtime: EcsRuntime, nativeEvent?: Event): void {
+    const state = this.getState(runtime);
+    for (const id of state.hoveredIds) {
+      const component = Array.from(state.components).find((entry) => entry.entity?.id === id);
+      if (!component) continue;
+      component.handleHudInput(
+        makeEvent("pointerleave", {
+          hudPoint: null,
+          pointerType: "mouse",
+          nativeEvent,
+        }),
+      );
+    }
+    state.hoveredIds.clear();
   }
 
   private getPointerCandidates(
@@ -491,39 +632,70 @@ class HudInputRouterImpl {
     const state = this.getState(runtime);
 
     return Array.from(state.components)
-      .filter((component) => component.ent.isAwake)
-      .filter((component) => component.enabled && component.interactive)
-      .filter((component) =>
-        pointerType === "touch" ? component.touchEnabled : component.pointerEnabled,
-      )
-      .filter((component) => {
-        if (!component.ent.hasComponent(HudLayoutNodeComponent)) {
-          return false;
-        }
-        const node = component.ent.getComponent(HudLayoutNodeComponent);
-        if (!node.visible || !node.interactive) return false;
-        return node.containsHudPoint(hudPoint);
-      })
+      .filter((component) => this.isPointerEligible(state, component, pointerType, hudPoint))
       .sort((a, b) => this.sortByPriority(a, b));
   }
 
   private sortByPriority(a: HudInputComponent, b: HudInputComponent): number {
-    const zA = this.getHudZIndex(a);
-    const zB = this.getHudZIndex(b);
-    if (zA !== zB) return zB - zA;
+    const drawA = RenderSystem.getHudDrawOrder(a.ent, a.ent.runtime);
+    const drawB = RenderSystem.getHudDrawOrder(b.ent, b.ent.runtime);
+    if (drawA !== drawB) {
+      if (drawA === null) return 1;
+      if (drawB === null) return -1;
+      return drawB - drawA;
+    }
     if (a.priority !== b.priority) return b.priority - a.priority;
-    return b.ent.id.localeCompare(a.ent.id);
+    return 0;
   }
 
-  private getHudZIndex(component: HudInputComponent): number {
-    let max = Number.NEGATIVE_INFINITY;
-    for (const entry of component.ent.components) {
-      const zIndex = (entry as { zIndex?: unknown }).zIndex;
-      if (typeof zIndex === "number") {
-        max = Math.max(max, zIndex);
+  private isInteractiveInHierarchy(component: HudInputComponent): boolean {
+    let entity = component.ent as typeof component.ent | null;
+    while (entity) {
+      if (entity.hasComponent(HudLayoutNodeComponent)) {
+        const node = entity.getComponent(HudLayoutNodeComponent);
+        if (!node.visible || !node.interactive) return false;
       }
+      entity = entity.parent;
     }
-    return Number.isFinite(max) ? max : 0;
+    return true;
+  }
+
+  private isBaseEligible(state: RuntimeState, component: HudInputComponent): boolean {
+    return (
+      state.components.has(component) &&
+      component.entity?.isAwake === true &&
+      component.enabled &&
+      component.interactive &&
+      this.isInteractiveInHierarchy(component)
+    );
+  }
+
+  private isPointerEligible(
+    state: RuntimeState,
+    component: HudInputComponent,
+    pointerType: HudPointerType,
+    point: Vector2D | null,
+  ): boolean {
+    if (!this.isBaseEligible(state, component)) return false;
+    if (pointerType === "touch" ? !component.touchEnabled : !component.pointerEnabled) return false;
+    if (!component.ent.hasComponent(HudLayoutNodeComponent)) return false;
+    return (
+      point === null || component.ent.getComponent(HudLayoutNodeComponent).containsHudPoint(point)
+    );
+  }
+
+  private isKeyboardEligible(state: RuntimeState, component: HudInputComponent): boolean {
+    return this.isBaseEligible(state, component) && component.keyboardEnabled;
+  }
+
+  private revalidateFocus(state: RuntimeState): void {
+    if (state.focusedId === null) return;
+    const focused = Array.from(state.components).find(
+      (component) => component.entity?.id === state.focusedId,
+    );
+    if (!focused || !this.isBaseEligible(state, focused)) {
+      this.setFocused(state, null);
+    }
   }
 
   private clientToHud(

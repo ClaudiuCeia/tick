@@ -1,11 +1,12 @@
 import type { Vector2D } from "../math/Vector2D.ts";
 
-export type HudPointerType = "mouse" | "touch";
+export type HudPointerType = "mouse" | "touch" | "pen";
 
 export type HudInputEventType =
   | "pointermove"
   | "pointerdown"
   | "pointerup"
+  | "pointercancel"
   | "pointerenter"
   | "pointerleave"
   | "click"
@@ -23,6 +24,7 @@ export type HudInputEventInit = {
   hudPoint: Vector2D | null;
   clientPoint?: Vector2D;
   pointerType?: HudPointerType;
+  pointerId?: number;
   touchId?: number;
   key?: string;
   code?: string;
@@ -34,6 +36,7 @@ export class HudInputEvent {
   public readonly hudPoint: Vector2D | null;
   public readonly clientPoint: Vector2D | null;
   public readonly pointerType: HudPointerType | null;
+  public readonly pointerId: number | null;
   public readonly touchId: number | null;
   public readonly key: string | null;
   public readonly code: string | null;
@@ -49,6 +52,7 @@ export class HudInputEvent {
     this.hudPoint = init.hudPoint;
     this.clientPoint = init.clientPoint ?? null;
     this.pointerType = init.pointerType ?? null;
+    this.pointerId = init.pointerId ?? null;
     this.touchId = init.touchId ?? null;
     this.key = init.key ?? null;
     this.code = init.code ?? null;

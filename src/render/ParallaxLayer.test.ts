@@ -35,4 +35,26 @@ describe("ParallaxLayer", () => {
     expect(draws[0]?.height).toBe(33);
     expect(draws.every((d) => d.y === 10)).toBe(true);
   });
+
+  test("restores canvas state when drawing throws", () => {
+    const image = {
+      width: 16,
+      height: 16,
+      naturalWidth: 16,
+      naturalHeight: 16,
+    } as HTMLImageElement;
+    const layer = new ParallaxLayer({ image });
+    let restored = 0;
+    const ctx = {
+      save: () => {},
+      restore: () => restored++,
+      drawImage: () => {
+        throw new Error("draw failed");
+      },
+      globalAlpha: 1,
+    } as unknown as CanvasRenderingContext2D;
+
+    expect(() => layer.render(ctx, { width: 16, height: 16 })).toThrow("draw failed");
+    expect(restored).toBe(1);
+  });
 });

@@ -42,6 +42,10 @@ export class HudInputComponent<T extends Entity = Entity> extends Component<T> {
       case "pointerup":
         this.onPointerUp(event);
         break;
+      case "pointercancel":
+        this.onPointerCancel(event);
+        this.onPointerLeave(event);
+        break;
       case "pointerenter":
         this.onPointerEnter(event);
         break;
@@ -89,6 +93,7 @@ export class HudInputComponent<T extends Entity = Entity> extends Component<T> {
   protected onPointerMove(_event: HudInputEvent): void {}
   protected onPointerDown(_event: HudInputEvent): void {}
   protected onPointerUp(_event: HudInputEvent): void {}
+  protected onPointerCancel(_event: HudInputEvent): void {}
   protected onPointerEnter(_event: HudInputEvent): void {}
   protected onPointerLeave(_event: HudInputEvent): void {}
   protected onClick(_event: HudInputEvent): void {}

@@ -70,16 +70,19 @@ export class ParallaxLayer {
     });
 
     ctx.save();
-    ctx.globalAlpha = alpha;
-    for (const tile of tiles) {
-      ctx.drawImage(
-        this.options.image,
-        tile.x,
-        tile.y,
-        tile.width + this.seamOverlapPx,
-        tile.height + this.seamOverlapPx,
-      );
+    try {
+      ctx.globalAlpha = alpha;
+      for (const tile of tiles) {
+        ctx.drawImage(
+          this.options.image,
+          tile.x,
+          tile.y,
+          tile.width + this.seamOverlapPx,
+          tile.height + this.seamOverlapPx,
+        );
+      }
+    } finally {
+      ctx.restore();
     }
-    ctx.restore();
   }
 }

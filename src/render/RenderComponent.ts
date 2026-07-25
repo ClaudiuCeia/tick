@@ -7,8 +7,28 @@ import { RenderSystem } from "./RenderSystem.ts";
 import type { ICamera } from "./ICamera.ts";
 
 export abstract class RenderComponent<T extends Entity = Entity> extends Component<T> {
-  public zIndex: RenderLayer;
+  private _zIndex: RenderLayer;
   protected elapsed: number = 0;
+
+  public get zIndex(): RenderLayer {
+    return this._zIndex;
+  }
+
+  public set zIndex(zIndex: RenderLayer) {
+    if (this.entity?.isAwake && RenderSystem.deferZIndex(this, zIndex, this.entity.runtime)) {
+      return;
+    }
+    if (this._zIndex === zIndex) return;
+    this._zIndex = zIndex;
+    if (this.entity?.isAwake) {
+      RenderSystem.resort(this, this.entity.runtime);
+    }
+  }
+
+  /** @internal Applied by RenderSystem at the next frame boundary. */
+  public _commitZIndex(zIndex: RenderLayer): void {
+    this._zIndex = zIndex;
+  }
 
   public get isHudComponent(): boolean {
     return false;
@@ -16,12 +36,17 @@ export abstract class RenderComponent<T extends Entity = Entity> extends Compone
 
   constructor(zIndex: RenderLayer) {
     super();
-    this.zIndex = zIndex;
+    this._zIndex = zIndex;
   }
 
   /** Template method — do not override. Override doRender instead. */
   public render(ctx: CanvasRenderingContext2D, camera: ICamera, canvasSize: Vector2D): void {
-    this.doRender(ctx, camera, canvasSize);
+    ctx.save();
+    try {
+      this.doRender(ctx, camera, canvasSize);
+    } finally {
+      ctx.restore();
+    }
   }
 
   /**

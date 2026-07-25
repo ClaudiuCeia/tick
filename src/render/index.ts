@@ -3,7 +3,12 @@ export { RenderLayer } from "./RenderLayer.ts";
 export { HudViewport, type HudFit, type CanvasViewportTarget } from "./HudViewport.ts";
 export { RenderComponent } from "./RenderComponent.ts";
 export { HudRenderComponent } from "./HudRenderComponent.ts";
-export { SpriteRenderComponent, type SpriteRenderOptions } from "./SpriteRenderComponent.ts";
+export {
+  SpriteRenderComponent,
+  type SpriteAlignX,
+  type SpriteAlignY,
+  type SpriteRenderOptions,
+} from "./SpriteRenderComponent.ts";
 export { SpriteAnimator, type SpriteClip } from "./SpriteAnimator.ts";
 export {
   TileScroller,

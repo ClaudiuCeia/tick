@@ -19,8 +19,8 @@ export class SpriteAnimator<TFrame> {
     if (clip.frames.length === 0) {
       throw new Error("Sprite clip must include at least one frame");
     }
-    if (!(clip.frameDuration > 0)) {
-      throw new Error("Sprite clip frameDuration must be > 0");
+    if (!Number.isFinite(clip.frameDuration) || !(clip.frameDuration > 0)) {
+      throw new Error("Sprite clip frameDuration must be finite and > 0");
     }
     this.clips.set(name, { ...clip, frames: [...clip.frames] });
     return this;
@@ -41,20 +41,27 @@ export class SpriteAnimator<TFrame> {
 
   public update(dt: number): void {
     const clip = this.activeClipName ? this.clips.get(this.activeClipName) : null;
-    if (!clip || clip.frames.length <= 1) return;
+    if (!clip || clip.frames.length <= 1 || !Number.isFinite(dt) || !(dt > 0)) return;
 
-    this.frameTime += dt;
-    while (this.frameTime >= clip.frameDuration) {
-      this.frameTime -= clip.frameDuration;
-      if (this.frameIndex + 1 < clip.frames.length) {
-        this.frameIndex += 1;
-      } else if (clip.loop ?? true) {
-        this.frameIndex = 0;
-      } else {
-        this.frameIndex = clip.frames.length - 1;
-      }
-      this.currentFrame = clip.frames[this.frameIndex]!;
+    const frameCount = clip.frames.length;
+    const looping = clip.loop ?? true;
+    const cycleDuration = clip.frameDuration * frameCount;
+    const elapsed = looping && Number.isFinite(cycleDuration) ? dt % cycleDuration : dt;
+    const untilNextFrame = clip.frameDuration - this.frameTime;
+    if (elapsed < untilNextFrame) {
+      this.frameTime += elapsed;
+      return;
     }
+
+    const remaining = elapsed - untilNextFrame;
+    const additionalSteps = Math.floor(remaining / clip.frameDuration);
+    const steps = Number.isFinite(additionalSteps) ? 1 + additionalSteps : frameCount;
+    this.frameTime = remaining % clip.frameDuration;
+
+    this.frameIndex = looping
+      ? (this.frameIndex + (steps % frameCount)) % frameCount
+      : Math.min(this.frameIndex + steps, frameCount - 1);
+    this.currentFrame = clip.frames[this.frameIndex]!;
   }
 
   public getFrame(): TFrame {

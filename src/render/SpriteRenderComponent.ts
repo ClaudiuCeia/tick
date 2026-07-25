@@ -6,8 +6,8 @@ import type { ICamera } from "./ICamera.ts";
 import { RenderComponent } from "./RenderComponent.ts";
 import { RenderLayer } from "./RenderLayer.ts";
 
-type SpriteAlignX = "left" | "center" | "right";
-type SpriteAlignY = "top" | "center" | "bottom";
+export type SpriteAlignX = "left" | "center" | "right";
+export type SpriteAlignY = "top" | "center" | "bottom";
 
 export type SpriteRenderOptions<T extends Entity> = {
   sprite: (entity: T) => HTMLImageElement | null;
@@ -39,21 +39,32 @@ export class SpriteRenderComponent<T extends Entity = Entity> extends RenderComp
     if (!sprite) return;
 
     const bbox = collider.bbox();
-    const topLeft = camera.toCanvas(new Vector2D(bbox.x, bbox.y), canvasSize);
+    const corners = [
+      new Vector2D(bbox.x, bbox.y),
+      new Vector2D(bbox.x + bbox.width, bbox.y),
+      new Vector2D(bbox.x, bbox.y + bbox.height),
+      new Vector2D(bbox.x + bbox.width, bbox.y + bbox.height),
+    ].map((corner) => camera.toCanvas(corner, canvasSize));
+    const left = Math.min(...corners.map((corner) => corner.x));
+    const right = Math.max(...corners.map((corner) => corner.x));
+    const top = Math.min(...corners.map((corner) => corner.y));
+    const bottom = Math.max(...corners.map((corner) => corner.y));
+    const width = right - left;
+    const height = bottom - top;
 
     const fit = fitRectContain(
       sprite.naturalWidth || sprite.width,
       sprite.naturalHeight || sprite.height,
       {
-        x: topLeft.x,
-        y: topLeft.y,
-        width: bbox.width,
-        height: bbox.height,
+        x: left,
+        y: top,
+        width,
+        height,
       },
     );
 
-    const drawX = this.computeAlignedAxis(topLeft.x, bbox.width, fit.width, this.alignX);
-    const drawY = this.computeAlignedAxis(topLeft.y, bbox.height, fit.height, this.alignY);
+    const drawX = this.computeAlignedAxis(left, width, fit.width, this.alignX);
+    const drawY = this.computeAlignedAxis(top, height, fit.height, this.alignY);
     ctx.drawImage(sprite, drawX, drawY, fit.width, fit.height);
   }
 

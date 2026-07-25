@@ -54,4 +54,34 @@ describe("SpriteRenderComponent", () => {
       height: 44,
     });
   });
+
+  test("transforms all collider corners and dimensions through camera zoom", () => {
+    class ZoomCamera extends CameraEntity {
+      override toCanvas(worldPos: Vector2D): Vector2D {
+        return new Vector2D(worldPos.x * 2 + 5, worldPos.y * 3 + 7);
+      }
+    }
+
+    const owner = new Node();
+    const collider = new CollisionEntity(new RectangleCollisionShape(20, 10), "top-left");
+    owner.addChild(collider);
+    const image = {
+      width: 20,
+      height: 10,
+      naturalWidth: 20,
+      naturalHeight: 10,
+    } as HTMLImageElement;
+    const sprite = new SpriteRenderComponent<Node>({ sprite: () => image });
+    owner.addComponent(sprite);
+    owner.awake();
+    collider.getComponent(TransformComponent).setPosition(10, 20);
+
+    const draws: number[][] = [];
+    const ctx = {
+      drawImage: (_image: HTMLImageElement, ...args: number[]) => draws.push(args),
+    } as unknown as CanvasRenderingContext2D;
+    sprite.doRender(ctx, new ZoomCamera(), new Vector2D(100, 100));
+
+    expect(draws).toEqual([[25, 72, 40, 20]]);
+  });
 });
