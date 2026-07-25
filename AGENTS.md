@@ -23,6 +23,7 @@ src/
 ├── render/       ICamera, RenderSystem, RenderComponent, HudRenderComponent, CollisionRenderComponent
 ├── scene/        Scene (abstract), SceneManager
 ├── input/        InputManager (runtime-scoped, three-state keyboard + mouse)
+├── world/        World fixed-step scheduler, systems, WorldLoop browser adapter
 ├── utils/        ObjectPool, Color
 └── devtools/     EntityProfiler (runtime prototype patching, perf reports)
 ```
@@ -291,6 +292,17 @@ manager.render(ctx);
 ```
 
 `Scene` is an abstract base with `awake()`, `update(dt)`, `render(ctx)`, `destroy()`. Scenes are responsible for creating/destroying their own entities.
+
+---
+
+### `world/`
+
+#### World / WorldLoop
+
+- `World` orders fixed- and frame-tick systems by phase and exposes `step(deltaTime)` for custom hosts.
+- `WorldLoop` is the shipped browser adapter. It drives a `World` with `requestAnimationFrame`, starts automatically by default, and has idempotent `start()` / `stop()` methods.
+- Pass `{ autoStart: false }` for deferred startup or a custom `FrameScheduler` for another host.
+- Stop the loop before `world.clearSystems()` and runtime teardown.
 
 ---
 

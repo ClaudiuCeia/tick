@@ -16,6 +16,7 @@
     "src/**/*.ts",
     "!src/**/*.test.ts",
     "README.md",
+    "MIGRATING.md",
     "LICENSE"
   ],
   "type": "module",

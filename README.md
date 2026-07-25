@@ -9,7 +9,7 @@ Tiny 2D game kitchen-sink for TypeScript + Bun.
 It currently includes:
 
 - ECS primitives (`Entity`, `Component`, `EntityRegistry`)
-- Ordered/fixed-step world scheduler (`World` + systems)
+- Browser animation loop and ordered/fixed-step world scheduler (`WorldLoop`, `World` + systems)
 - Input manager (keyboard + mouse state)
 - Collision shapes/entities + broadphase (`SpatialHashBroadphase`)
 - Lightweight physics (`PhysicsBodyComponent`, `PhysicsSystem`)
@@ -27,48 +27,14 @@ It is mostly a personal playground for experimenting and learning. I publish it 
 bun add @claudiu-ceia/tick
 ```
 
-## Migrating to 0.2.0
+## Upgrading
 
-`0.2.0` tightens several contracts that previously allowed ambiguous or unsafe behavior:
-
-- `a.angleTo(b)` now returns the angle pointing from `a` toward `b`. If code depended on the old
-  reverse direction, swap the operands (`b.angleTo(a)`) or use the deprecated `a.angleFrom(b)`
-  while migrating.
-- `entity.removeComponent(Type)` invokes that component's `destroy()` hook before fully detaching
-  it. Do not manually destroy the component or retain it for reuse on another entity.
-- `EcsRuntime.reset()` now disposes the current runtime before installing a fresh default runtime.
-  Existing entities, input listeners, assets, and persisted state owned by the old runtime are torn
-  down. Renderer instances still need their own `renderSystem.dispose()` call.
-- Read APIs that expose mutable vectors now return copies, including input positions/deltas/drag
-  starts, physics velocity, tile-scroller offset, and global transform/position results. Mutating a
-  returned vector no longer mutates engine state; use the corresponding setter or mutation method.
-- Constructors and mutators now reject invalid numeric state earlier. Expect errors for non-finite
-  positions, rotations, velocities, seeds, timesteps, and physics options, and for non-positive
-  dimensions, scales, masses, radii, and broadphase cell sizes. Noise octave/gain parameters and
-  persisted identifiers are validated more strictly as well.
-- Curves are finite solids rather than effectively unbounded terrain. Set their `width` and `depth`,
-  keep rotation at `0` and scale at `1`, and choose broadphase and collision sampling deliberately.
-  Physics treats curve bodies as static and resolves them vertically.
-- Successful `runtime.loadSnapshot(...)` now replaces the entire runtime entity graph, not just the
-  snapshot's root subtree. Staging/validation failures preserve the old graph; success destroys all
-  old runtime entities, adopts the staged graph, and leaves its root asleep for the scene to awaken.
-- Entity creation-site tracing is now disabled by default. Construct the registry with
-  `new EntityRegistry({ captureCreationSites: true })` when the diagnostic stack cost is wanted.
-- Every `RenderComponent.render()` call now wraps `doRender()` in its own `ctx.save()` / `restore()`
-  pair, including when rendering throws. Do not depend on canvas state leaking between components.
-- `GarbageCollector.get(...)` no longer returns shared singleton state. It creates an independent
-  collector each call. A collector with an explicit registry stays bound to it; one without a
-  registry resolves `EcsRuntime.getCurrent().registry` when used, so retain and configure instances
-  intentionally.
-- `EntityProfiler.start()` instruments prototype methods and existing instances, and automatically
-  instruments ordinary overrides on later entities/components. A lifecycle override implemented as
-  an entity class field is assigned after the base constructor's registration hook, so call
-  `EntityProfiler.instrument(entity)` after construction for that instance.
+See [MIGRATING.md](./MIGRATING.md) for release-specific migration notes.
 
 ## Quickstart
 
-The runtime does not own a loop. Create the graph in the runtime context, add systems to a
-`World`, and step it from your host loop:
+`WorldLoop` drives a `World` from `requestAnimationFrame`. Create the graph in the runtime context,
+add systems to the world, and start the loop:
 
 ```ts
 import {
@@ -79,9 +45,11 @@ import {
   PhysicsSystem,
   RectangleCollisionShape,
   SystemPhase,
+  SystemTickMode,
   TransformComponent,
   Vector2D,
   World,
+  WorldLoop,
 } from "@claudiu-ceia/tick";
 
 class Game extends Entity {}
@@ -115,28 +83,32 @@ world.addSystem({
   },
 });
 world.addSystem(new PhysicsSystem());
+world.addSystem({
+  phase: SystemPhase.Render,
+  tickMode: SystemTickMode.Frame,
+  update() {
+    runtime.input.clearFrame();
+  },
+});
 
-let frameId = 0;
-let previous = performance.now();
-const frame = (now: number): void => {
-  world.step((now - previous) / 1000);
-  runtime.input.clearFrame();
-  previous = now;
-  frameId = requestAnimationFrame(frame);
-};
-frameId = requestAnimationFrame(frame);
+const loop = new WorldLoop(world);
 
 const stop = (): void => {
-  cancelAnimationFrame(frameId);
+  loop.stop();
   world.clearSystems();
   runtime.dispose();
 };
 window.addEventListener("pagehide", stop, { once: true });
 ```
 
-`World.step()` installs its runtime while invoking systems, so systems can use
+`WorldLoop` is the browser adapter; custom hosts can omit it and call `World.step(deltaTime)`
+directly. `World.step()` installs its runtime while invoking systems, so systems can use
 `EcsRuntime.getCurrent()`. Entity construction outside a world callback must use
 `EcsRuntime.runWith(runtime, ...)` so the entity joins the intended registry.
+
+The loop starts automatically, clamps unusually long frame deltas to 50 ms, and can be stopped and
+restarted safely. Pass `{ autoStart: false }` when setup must finish before the first frame. A custom
+`FrameScheduler` can drive the same loop outside the browser.
 
 ## Lifecycle and ownership
 
@@ -161,8 +133,8 @@ must not be used as a disposal shortcut.
 A `RenderSystem` owns the HUD router listeners it configures for its canvas. Call
 `renderSystem.dispose()` when that renderer is retired, then destroy the scene graph (or call
 `runtime.dispose()`) so render components unregister. `runtime.dispose()` cannot dispose renderer
-instances it was never given. Also stop the host loop and call `world.clearSystems()` to run system
-teardown.
+instances it was never given. Also stop `WorldLoop` (or your host loop) and call
+`world.clearSystems()` to run system teardown.
 
 ## Input and pointers
 
